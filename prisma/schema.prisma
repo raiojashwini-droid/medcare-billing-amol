@@ -1,0 +1,411 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.VarChar(50)
+  email        String     @unique @db.VarChar(150)
+  passwordHash String     @map("password_hash") @db.VarChar(255)
+  name         String?    @db.VarChar(100) // support mock user name
+  fullName     String?    @map("full_name") @db.VarChar(100) // support db naming
+  role         String     @db.VarChar(50)
+  title        String?    @db.VarChar(100) // user job title e.g. Attending Physician
+  status       String     @default("ACTIVE") @db.VarChar(50)
+  avatar       String?    @db.MediumText
+  mfaSecret    String?    @map("mfa_secret") @db.VarChar(100)
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+model Provider {
+  id                    String         @id @db.VarChar(50)
+  name                  String         @db.VarChar(150)
+  businessName          String         @map("business_name") @db.VarChar(200)
+  serviceCategory       String?        @map("service_category") @db.VarChar(100)
+  status                String         @default("ACTIVE") @db.VarChar(50)
+  isPlaceholder         Boolean        @default(false) @map("is_placeholder")
+  address               Json?
+  contact               Json?
+  identifiers           Json?
+  renderingProvider     Json?          @map("rendering_provider")
+  serviceFacility       Json?          @map("service_facility")
+  billingProvider       Json?          @map("billing_provider")
+  defaultPlaceOfService String?        @map("default_place_of_service") @db.VarChar(10)
+  availableServices     Json?          @map("available_services")
+  availableDiagnoses    Json?          @map("available_diagnoses")
+  providerServices      Json?          @map("provider_services")
+  appointments          Appointment[]
+  clinicalNotes         ClinicalNote[]
+  bills                 Bill[]
+
+  @@map("providers")
+}
+
+model Patient {
+  id                  String         @id @db.VarChar(50)
+  patientId           String?        @map("patient_id_mrn") @db.VarChar(50)
+  firstName           String         @map("first_name") @db.VarChar(100)
+  middleName          String?        @map("middle_name") @db.VarChar(100)
+  lastName            String         @map("last_name") @db.VarChar(100)
+  dob                 String?        @db.VarChar(20)
+  dobDate             DateTime?      @map("dob_date") @db.Date
+  sex                 String         @db.VarChar(10)
+  phone               String?        @db.VarChar(20)
+  email               String?        @db.VarChar(150)
+  ssn                 String?        @db.VarChar(50)
+  primaryGroupNumber  String?        @map("primary_group_number") @db.VarChar(100)
+  street              String?        @db.VarChar(200)
+  suite               String?        @db.VarChar(50)
+  city                String?        @db.VarChar(100)
+  state               String?        @db.VarChar(10)
+  zipCode             String?        @map("zip_code") @db.VarChar(20)
+  location            String?        @db.VarChar(200)
+  communicationPref   String?        @map("communication_pref") @db.VarChar(50)
+  consentStatus       String?        @map("consent_status") @db.VarChar(50)
+  relationshipToInsured String?        @map("relationship_to_insured") @db.VarChar(50)
+  assignedProviderIds Json?          @map("assigned_provider_ids")
+  status              String         @default("ACTIVE") @db.VarChar(50)
+  createdAt           String?        @map("created_at_str") @db.VarChar(30)
+  createdAtDate       DateTime       @default(now()) @map("created_at")
+  maritalStatus       String?        @map("marital_status") @db.VarChar(50)
+  driversLicense      String?        @map("drivers_license") @db.VarChar(50)
+  driversLicenseState String?        @map("drivers_license_state") @db.VarChar(10)
+  language            String?        @db.VarChar(50)
+  ethnicity           String?        @db.VarChar(100)
+  employmentStatus    String?        @map("employment_status") @db.VarChar(50)
+  employerName        String?        @map("employer_name") @db.VarChar(150)
+  emergencyContactName String?       @map("emergency_contact_name") @db.VarChar(150)
+  emergencyContactRelation String?   @map("emergency_contact_relation") @db.VarChar(50)
+  emergencyContactPhone String?      @map("emergency_contact_phone") @db.VarChar(20)
+  insuranceType       String?        @map("insurance_type") @db.VarChar(100)
+  primaryInsuranceCompany String?    @map("primary_insurance_company") @db.VarChar(150)
+  primaryPolicyNumber String?        @map("primary_policy_number") @db.VarChar(100)
+  primaryInsuranceMemberId String?   @map("primary_insurance_member_id") @db.VarChar(100)
+  policyHolderName    String?        @map("policy_holder_name") @db.VarChar(150)
+  policyHolderDob     String?        @map("policy_holder_dob") @db.VarChar(20)
+  insuranceAdjusterName String?      @map("insurance_adjuster_name") @db.VarChar(100)
+  insuranceAdjusterPhone String?     @map("insurance_adjuster_phone") @db.VarChar(20)
+  secondaryInsuranceCompany String?  @map("secondary_insurance_company") @db.VarChar(150)
+  secondaryPolicyNumber String?      @map("secondary_policy_number") @db.VarChar(100)
+  knownAllergies      String?        @map("known_allergies") @db.VarChar(255)
+  allergyReactionSeverity String?    @map("allergy_reaction_severity") @db.VarChar(100)
+  currentMedications  String?        @map("current_medications") @db.Text
+  pastMedicalHistory  String?        @map("past_medical_history") @db.Text
+  selectedInjuryAreas Json?          @map("selected_injury_areas")
+  accidentDate        String?        @map("accident_date_str") @db.VarChar(50)
+  mechanismOfInjury   String?        @map("mechanism_of_injury") @db.VarChar(255)
+  patientNotes        String?        @map("patient_notes") @db.Text
+  hipaaConsentSigned  Boolean?       @map("hipaa_consent_signed")
+  cases               Case[]
+  appointments        Appointment[]
+  clinicalNotes       ClinicalNote[]
+
+  @@index([lastName])
+  @@map("patients")
+}
+
+model Case {
+  id                     String         @id @db.VarChar(50)
+  caseId                 String?        @map("case_id_str") @db.VarChar(50)
+  patientId              String         @map("patient_id") @db.VarChar(50)
+  accidentDate           String?        @map("accident_date_str") @db.VarChar(20)
+  accidentDateVal        DateTime?      @map("accident_date") @db.Date
+  initialDate            String?        @map("initial_date_str") @db.VarChar(20)
+  initialDateVal         DateTime?      @map("initial_date") @db.Date
+  dischargeDate          String?        @map("discharge_date_str") @db.VarChar(20)
+  dischargeDateVal       DateTime?      @map("discharge_date") @db.Date
+  accidentType           String         @map("accident_type") @db.VarChar(100)
+  accidentState          String         @map("accident_state") @db.VarChar(10)
+  accidentCity           String?        @map("accident_city") @db.VarChar(100)
+  accidentLocation       String?        @map("accident_location") @db.VarChar(255)
+  mechanismOfInjury      String?        @map("mechanism_of_injury") @db.VarChar(255)
+  policeReportNumber     String?        @map("police_report_number") @db.VarChar(100)
+  emergencyTransport     String?        @map("emergency_transport") @db.VarChar(50)
+  chiefComplaint         String?        @map("chief_complaint") @db.Text
+  painDescription        String?        @map("pain_description") @db.Text
+  injuryBodyParts        String?        @map("injury_body_parts") @db.VarChar(255)
+  diagnosisCodes         Json?          @map("diagnosis_codes")
+  referringProviderName  String?        @map("referring_provider_name") @db.VarChar(100)
+  referringProviderNpi   String?        @map("referring_provider_npi") @db.VarChar(50)
+  attorneyName           String?        @map("attorney_name") @db.VarChar(150)
+  lawFirm                String?        @map("law_firm") @db.VarChar(150)
+  attorneyAddress        String?        @map("attorney_address") @db.VarChar(255)
+  attorneyPhone          String?        @map("attorney_phone") @db.VarChar(20)
+  attorneyEmail          String?        @map("attorney_email") @db.VarChar(150)
+  lawFirmAddress         String?        @map("law_firm_address") @db.VarChar(255)
+  litigationStatus       String?        @map("litigation_status") @db.VarChar(50)
+  insuranceCompany       String?        @map("insurance_company") @db.VarChar(150)
+  insurancePolicyNumber  String?        @map("insurance_policy_number") @db.VarChar(100)
+  insuranceClaimNumber   String?        @map("insurance_claim_number") @db.VarChar(100)
+  insuranceAdjuster      String?        @map("insurance_adjuster") @db.VarChar(100)
+  insuranceAdjusterPhone String?        @map("insurance_adjuster_phone") @db.VarChar(20)
+  liabilityStatus        String?        @map("liability_status") @db.VarChar(50)
+  caseNotes              String?        @map("case_notes") @db.Text
+  assignedProviderIds    Json?          @map("assigned_provider_ids")
+  status                 String         @default("OPEN") @db.VarChar(50)
+  createdAt              DateTime       @default(now()) @map("created_at")
+  patient                Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointments           Appointment[]
+  clinicalNotes          ClinicalNote[]
+  bills                  Bill[]
+  documents              Document[]
+
+  @@index([patientId])
+  @@map("cases")
+}
+
+model Appointment {
+  id                 String    @id @db.VarChar(50)
+  patientId          String    @map("patient_id") @db.VarChar(50)
+  caseId             String?   @map("case_id") @db.VarChar(50)
+  providerId         String    @map("provider_id") @db.VarChar(50)
+  date               String?   @db.VarChar(20)
+  appointmentDate    DateTime? @map("appointment_date") @db.Date
+  startTime          String    @map("start_time") @db.VarChar(20)
+  endTime            String    @map("end_time") @db.VarChar(20)
+  status             String    @default("SCHEDULED") @db.VarChar(50)
+  bookingRef         String?   @map("booking_ref") @db.VarChar(50)
+  bookingChannel     String?   @map("booking_channel") @db.VarChar(100)
+  reminderStatus     String?   @map("reminder_status") @db.VarChar(100)
+  reminderPreference String?   @map("reminder_preference") @db.VarChar(50)
+  reasonForVisit     String?   @map("reason_for_visit") @db.Text
+  appointmentType    String?   @map("appointment_type") @db.VarChar(100)
+  cptCode            String?   @map("cpt_code") @db.VarChar(255)
+  location           String?   @db.VarChar(150)
+  createdAt          DateTime  @default(now()) @map("created_at")
+  patient            Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  case               Case?     @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  provider           Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("appointments")
+}
+
+model ClinicalNote {
+  id                    String    @id @db.VarChar(50)
+  patientId             String    @map("patient_id") @db.VarChar(50)
+  caseId                String    @map("case_id") @db.VarChar(50)
+  providerId            String    @map("provider_id") @db.VarChar(50)
+  noteType              String    @map("note_type") @db.VarChar(50)
+  title                 String?   @db.VarChar(150)
+  date                  String?   @db.VarChar(20)
+  status                String    @default("UNSIGNED") @db.VarChar(50)
+  author                String?   @db.VarChar(100)
+  signedBy              String?   @map("signed_by") @db.VarChar(100)
+  signedAt              DateTime? @map("signed_at")
+  signatureUrl          String?   @map("signature_url") @db.MediumText
+  soapSubjective        String?   @map("soap_subjective") @db.Text
+  soapObjective         String?   @map("soap_objective") @db.Text
+  soapAssessment        String?   @map("soap_assessment") @db.Text
+  soapPlan              String?   @map("soap_plan") @db.Text
+  anatomicalDiagramData String?   @map("anatomical_diagram_data") @db.Text
+  content               Json?     @map("content")
+  addendums             Json?     @map("addendums")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  patient               Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  case                  Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  provider              Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, status])
+  @@map("clinical_notes")
+}
+
+model Bill {
+  id              String        @id @db.VarChar(50)
+  caseId          String        @map("case_id") @db.VarChar(50)
+  providerId      String        @map("provider_id") @db.VarChar(50)
+  invoiceNumber   String        @unique @map("invoice_number") @db.VarChar(50)
+  statementNumber String?       @map("statement_number") @db.VarChar(50)
+  statementDate   String?       @map("statement_date") @db.VarChar(50)
+  billToName      String?       @map("bill_to_name") @db.VarChar(150)
+  billToAddress   String?       @map("bill_to_address") @db.VarChar(255)
+  status          String        @default("UNBILLED") @db.VarChar(50)
+  totals          Json?         @map("totals")
+  aging           Json?         @map("aging")
+  cmsSignatures   Json?         @map("cms_signatures")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  case            Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  provider        Provider      @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  serviceLines    ServiceLine[]
+  transactions    Transaction[]
+
+  @@index([caseId])
+  @@map("bills")
+}
+
+model ServiceLine {
+  id               String   @id @db.VarChar(50)
+  billId           String   @map("bill_id") @db.VarChar(50)
+  dos              String?  @db.VarChar(20)
+  dateOfService    String?  @map("date_of_service") @db.VarChar(20)
+  placeOfService   String   @default("11") @map("place_of_service") @db.VarChar(10)
+  cptCode          String   @map("cpt_code") @db.VarChar(10)
+  description      String?  @db.VarChar(150)
+  modifier1        String?  @map("modifier_1") @db.VarChar(5)
+  modifier2        String?  @map("modifier_2") @db.VarChar(5)
+  modifier3        String?  @map("modifier_3") @db.VarChar(5)
+  modifier4        String?  @map("modifier_4") @db.VarChar(5)
+  diagPointer      String?  @map("diag_pointer") @db.VarChar(20)
+  diagnosisPointer String?  @map("diagnosis_pointer") @db.VarChar(20)
+  units            Int      @default(1)
+  charge           Decimal  @db.Decimal(10, 2)
+  payments         Json?    @map("payments")
+  insurancePayment Decimal  @default(0.00) @map("insurance_payment") @db.Decimal(10, 2)
+  patientPayment   Decimal  @default(0.00) @map("patient_payment") @db.Decimal(10, 2)
+  otherPayment     Decimal  @default(0.00) @map("other_payment") @db.Decimal(10, 2)
+  adjustment       Decimal? @default(0.00) @map("adjustment") @db.Decimal(10, 2)
+  adjustments      Decimal? @default(0.00) @map("adjustments") @db.Decimal(10, 2)
+  balance          Decimal  @db.Decimal(10, 2)
+  lineBalance      Decimal  @map("line_balance") @db.Decimal(10, 2)
+  bill             Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId])
+  @@map("service_lines")
+}
+
+model Transaction {
+  id              String   @id @db.VarChar(50)
+  billId          String   @map("bill_id") @db.VarChar(50)
+  transactionType String   @map("transaction_type") @db.VarChar(50)
+  source          String?  @db.VarChar(50)
+  amount          Decimal  @db.Decimal(10, 2)
+  referenceNumber String?  @map("reference_number") @db.VarChar(100)
+  notes           String?  @db.Text
+  createdAt       DateTime @default(now()) @map("created_at")
+  bill            Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
+}
+
+model Document {
+  id           String   @id @db.VarChar(50)
+  caseId       String   @map("case_id") @db.VarChar(50)
+  name         String   @db.VarChar(150)
+  type         String?  @db.VarChar(100)
+  documentType String   @map("document_type") @db.VarChar(100)
+  providerName String?  @map("provider_name") @db.VarChar(150)
+  date         String?  @db.VarChar(20)
+  status       String   @db.VarChar(50)
+  size         String?  @db.VarChar(50)
+  url          String   @default("") @db.VarChar(255)
+  uploadedAt   DateTime @default(now()) @map("uploaded_at")
+  case         Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@map("documents")
+}
+
+model AuditLog {
+  id        String   @id @db.VarChar(50)
+  userId    String?  @map("user_id") @db.VarChar(100)
+  userName  String?  @map("user_name") @db.VarChar(100)
+  user      String?  @db.VarChar(100)
+  role      String   @db.VarChar(50)
+  action    String   @db.VarChar(100)
+  resource  String?  @db.VarChar(250)
+  patientId String?  @map("patient_id") @db.VarChar(50)
+  ipAddress String?  @map("ip_address") @db.VarChar(45)
+  details   String?  @db.Text
+  timestamp String?  @db.VarChar(30)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model ReminderSetting {
+  id                   String   @id @default("default") @db.VarChar(50)
+  enable24hSms         Boolean  @default(true) @map("enable_24h_sms")
+  enable2hEmail        Boolean  @default(true) @map("enable_2h_email")
+  enableMissedFollowUp Boolean  @default(true) @map("enable_missed_follow_up")
+  smsTemplate          String   @db.Text @map("sms_template")
+  emailTemplate        String   @db.Text @map("email_template")
+
+  @@map("reminder_settings")
+}
+
+model ReminderLog {
+  id             String   @id @db.VarChar(50)
+  patientName    String   @map("patient_name") @db.VarChar(150)
+  channel        String   @db.VarChar(50)
+  sentAt         String   @map("sent_at") @db.VarChar(30)
+  recipient      String   @db.VarChar(150)
+  status         String   @db.VarChar(100)
+  messagePreview String   @map("message_preview") @db.Text
+
+  @@map("reminder_logs")
+}
+
+model GeneralSetting {
+  id   String @id @default("default") @db.VarChar(50)
+  data Json
+
+  @@map("general_settings")
+}
+
+model ICDCode {
+  id          String   @id @default(uuid()) @db.VarChar(50)
+  code        String   @unique @db.VarChar(20)
+  description String   @db.VarChar(255)
+  category    String   @default("General") @db.VarChar(100)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("icd_codes")
+}
+
+model Modifier {
+  id          String   @id @default(uuid()) @db.VarChar(50)
+  code        String   @unique @db.VarChar(20)
+  description String   @db.VarChar(255)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("modifiers")
+}
+
+model ServiceModality {
+  id           String   @id @default(uuid()) @db.VarChar(50)
+  name         String   @db.VarChar(100)
+  providerId   String?  @map("provider_id") @db.VarChar(50)
+  enabled      Boolean  @default(false)
+  cptCode      String   @map("cpt_code") @db.VarChar(50)
+  fee          String   @db.VarChar(50)
+  duration     String   @db.VarChar(50)
+  template     String   @db.VarChar(100)
+  status       String   @default("ACTIVE") @db.VarChar(50)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("service_modalities")
+}
+
+model CptCode {
+  id          String   @id @default(uuid()) @db.VarChar(50)
+  code        String   @unique @db.VarChar(50)
+  description String   @db.VarChar(255)
+  fee         String   @db.VarChar(50)
+  category    String   @db.VarChar(100)
+  modifiers   String   @db.VarChar(100)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("cpt_codes")
+}
+
+model Holiday {
+  id          String   @id @default(uuid()) @db.VarChar(50)
+  name        String   @db.VarChar(150)
+  type        String   @db.VarChar(20)
+  month       Int
+  day         Int?
+  nth         Int?
+  dayOfWeek   Int?     @map("day_of_week")
+  last        Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("holidays")
+}
