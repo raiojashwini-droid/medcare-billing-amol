@@ -100,6 +100,7 @@ model Patient {
   currentMedications  String?        @map("current_medications") @db.Text
   pastMedicalHistory  String?        @map("past_medical_history") @db.Text
   selectedInjuryAreas Json?          @map("selected_injury_areas")
+  otherInjuryAreaSpecify String?     @map("other_injury_area_specify") @db.VarChar(255)
   accidentDate        String?        @map("accident_date_str") @db.VarChar(50)
   mechanismOfInjury   String?        @map("mechanism_of_injury") @db.VarChar(255)
   patientNotes        String?        @map("patient_notes") @db.Text
