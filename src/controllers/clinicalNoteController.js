@@ -37,13 +37,15 @@ const formatNote = (n) => {
  * Get clinical notes list with optional filters
  */
 export const getNotes = async (req, res) => {
-  const { patientId, providerId, status } = req.query;
+  const { patientId, providerId, status, caseId, type } = req.query;
 
   try {
     const where = {};
     if (patientId) where.patientId = patientId;
     if (providerId) where.providerId = providerId;
     if (status) where.status = status;
+    if (caseId) where.caseId = caseId;
+    if (type) where.noteType = type;
 
     const notes = await prisma.clinicalNote.findMany({
       where,
@@ -168,6 +170,37 @@ export const createNote = async (req, res) => {
     }
 
     const noteType = data.type || data.noteType || 'JOSMIC_PAIN';
+
+    // If saving an AI_DOCTOR_NOTE, update existing note for this case if present
+    if (noteType === 'AI_DOCTOR_NOTE' && validCaseId) {
+      const existingDocNote = await prisma.clinicalNote.findFirst({
+        where: {
+          caseId: validCaseId,
+          noteType: 'AI_DOCTOR_NOTE'
+        }
+      });
+
+      if (existingDocNote) {
+        const updated = await prisma.clinicalNote.update({
+          where: { id: existingDocNote.id },
+          data: {
+            title: data.title || existingDocNote.title,
+            status: data.status || existingDocNote.status,
+            author: data.author || existingDocNote.author,
+            soapSubjective: data.soapSubjective || (data.content?.presentingConcerns || ''),
+            soapObjective: data.soapObjective || (data.content?.objectiveExam || ''),
+            soapAssessment: data.soapAssessment || (data.content?.diagnosticImpression || ''),
+            soapPlan: data.soapPlan || (data.content?.treatmentPlan || ''),
+            content: data.content || existingDocNote.content
+          },
+          include: {
+            patient: { select: { firstName: true, lastName: true, selectedInjuryAreas: true } },
+            provider: { select: { name: true } }
+          }
+        });
+        return res.status(200).json(formatNote(updated));
+      }
+    }
 
     const newNote = await prisma.clinicalNote.create({
       data: {
@@ -309,17 +342,50 @@ export const generateAiDraft = async (req, res) => {
   const geminiApiKey = process.env.GEMINI_API_KEY;
   const groqApiKey = process.env.GROQ_API_KEY;
 
-  // 1. If user provided a free Google Gemini API Key:
-  if (geminiApiKey) {
-    try {
-      const prompt = `You are an expert clinical medical documentation AI assistant for a US accident & personal injury medical practice. 
+  // Build prompt for live AI
+  let aiPrompt = '';
+  if (promptType === 'DOCTOR_NOTE') {
+    aiPrompt = `You are a clinical documentation assistant for a personal injury and multi-specialty medical practice.
+Your task is to compile and synthesize the provided patient clinical documentation into a structured Doctor's Note / Clinical Summary draft.
+
+CRITICAL CLINICAL RULES:
+1. Summarize and organize documented facts ONLY.
+2. DO NOT fabricate or invent diagnoses, symptoms, treatments, dates, findings, medications, or other clinical facts not supported by the provided documentation.
+3. If information for any section is not documented in the provided sources, explicitly state: "Information not documented in selected records." Do NOT invent filler data.
+4. Organize the note using the following exact standard sections:
+   1. PRESENTING CONCERNS & CHIEF COMPLAINT
+   2. SUBJECTIVE HISTORY & PAIN QUALITY
+   3. OBJECTIVE & PHYSICAL EXAMINATION FINDINGS
+   4. CLINICAL ASSESSMENT & DIAGNOSTIC IMPRESSION
+   5. TREATMENT & PROCEDURES ADMINISTERED
+   6. COURSE OF CARE & CLINICAL PROGRESS
+   7. TREATMENT PLAN & THERAPEUTIC GOALS
+   8. FOLLOW-UP & DISCHARGE RECOMMENDATIONS / PROGNOSIS
+
+PATIENT / CASE DEMOGRAPHICS:
+- Patient Name: ${patientName}
+- Date of Service / Review: ${inputData?.dos || 'Current'}
+- Accident / Injury Context: ${complaints}
+- Injury Locations: ${locations}
+- Referring / Attending Provider: ${inputData?.providerName || 'Attending Physician'}
+
+COMPILED SOURCE CLINICAL DOCUMENTATION:
+${inputData?.compiledDocumentation || 'No additional records provided.'}
+
+Generate a clear, professional, structured clinical note adhering strictly to the facts above.`;
+  } else {
+    aiPrompt = `You are an expert clinical medical documentation AI assistant for a US accident & personal injury medical practice. 
 Generate a professional, medically precise, structured ${promptType} clinical note draft for an attending physician to review.
 Patient Name: ${patientName}
 Chief Complaint & Accident Context: ${complaints}
 Pain Locations: ${locations}
 Section to Generate: ${promptType} (HPI / Physical Exam Summary / Assessment & Plan / Clinical Progress Narrative).
 Provide clean, concise medical prose with standard medical terminology and ICD-10 diagnostic implications. Output only the note content.`;
+  }
 
+  // 1. If user provided a free Google Gemini API Key:
+  if (geminiApiKey) {
+    try {
       const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
         method: 'POST',
         headers: {
@@ -327,7 +393,7 @@ Provide clean, concise medical prose with standard medical terminology and ICD-1
           'x-goog-api-key': geminiApiKey
         },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
+          contents: [{ parts: [{ text: aiPrompt }] }]
         })
       });
 
@@ -351,7 +417,6 @@ Provide clean, concise medical prose with standard medical terminology and ICD-1
   // 2. If user provided a free Groq API Key:
   if (groqApiKey) {
     try {
-      const prompt = `Generate a structured ${promptType} clinical note draft for patient ${patientName}. Context: ${complaints}. Locations: ${locations}. Output only medical text.`;
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -360,7 +425,7 @@ Provide clean, concise medical prose with standard medical terminology and ICD-1
         },
         body: JSON.stringify({
           model: 'llama-3.3-70b-versatile',
-          messages: [{ role: 'user', content: prompt }]
+          messages: [{ role: 'user', content: aiPrompt }]
         })
       });
 
@@ -384,14 +449,62 @@ Provide clean, concise medical prose with standard medical terminology and ICD-1
   // 3. High-Quality Built-in Clinical Medical Generator (Works instantly with 0 keys needed!)
   let draftText = '';
 
-  if (promptType === 'HPI') {
-    draftText = `HISTORY OF PRESENT ILLNESS (AI DRAFT):\nThe patient, ${patientName}, presents with acute onset discomfort localized to the ${locations}. Symptoms initiated immediately following a motor vehicle collision (${complaints}). Pain is characterized as sharp and throbbing with functional restrictions during lumbar extension and cervical rotation. Patient reports current pain level as 7/10.`;
+  if (promptType === 'DOCTOR_NOTE') {
+    const compiled = inputData?.compiledDocumentation || '';
+    const diag = inputData?.diagnosisCodes ? (Array.isArray(inputData.diagnosisCodes) ? inputData.diagnosisCodes.join(', ') : inputData.diagnosisCodes) : '';
+    const sessions = inputData?.totalSessions || inputData?.sessionsCount || '';
+    const procedures = inputData?.proceduresList || '';
+
+    // Extract actual documented section text if present in compiled source text
+    const extractSection = (regex) => {
+      const m = compiled.match(regex);
+      return m && m[1] ? m[1].trim() : '';
+    };
+
+    const documentedExam = inputData?.examFindings || extractSection(/(?:objective|exam|reexamFindings|physicalExam)[:\s]+([^\n\r]+)/i);
+    const documentedProgress = inputData?.progressSummary || extractSection(/(?:progress|outcome|courseOfCare|progressNotes)[:\s]+([^\n\r]+)/i);
+    const documentedPlan = inputData?.treatmentPlan || extractSection(/(?:treatmentPlan|goals|futureCare|planFollowUp)[:\s]+([^\n\r]+)/i);
+    const documentedFollowUp = inputData?.followUp || extractSection(/(?:followUp|dischargeRecommendations|recommendations)[:\s]+([^\n\r]+)/i);
+
+    draftText = `1. PRESENTING CONCERNS & CHIEF COMPLAINT:
+${inputData?.chiefComplaint || (complaints ? `Patient presents following reported injury: ${complaints}.` : 'Information not documented in selected records.')}
+
+2. SUBJECTIVE HISTORY & PAIN QUALITY:
+${inputData?.painDescription || (locations ? `Symptoms localized to ${locations}.` : 'Information not documented in selected records.')}
+
+3. OBJECTIVE & PHYSICAL EXAMINATION FINDINGS:
+${documentedExam || 'Information not documented in selected records.'}
+
+4. CLINICAL ASSESSMENT & DIAGNOSTIC IMPRESSION:
+${diag ? `Clinical diagnoses documented: ${diag}` : 'Information not documented in selected records.'}
+
+5. TREATMENT & PROCEDURES ADMINISTERED:
+${procedures || (sessions ? `Completed ${sessions} documented treatment session(s) targeting affected anatomical regions.` : 'Information not documented in selected records.')}
+
+6. COURSE OF CARE & CLINICAL PROGRESS:
+${documentedProgress || 'Information not documented in selected records.'}
+
+7. TREATMENT PLAN & THERAPEUTIC GOALS:
+${documentedPlan || 'Information not documented in selected records.'}
+
+8. FOLLOW-UP & DISCHARGE RECOMMENDATIONS / PROGNOSIS:
+${documentedFollowUp || 'Information not documented in selected records.'}`;
+  } else if (promptType === 'HPI') {
+    draftText = complaints
+      ? `HISTORY OF PRESENT ILLNESS:\nPatient presents for evaluation regarding documented injury: ${complaints}.${locations ? ` Symptoms documented in: ${locations}.` : ''}`
+      : 'Information not documented in selected records.';
   } else if (promptType === 'EXAM') {
-    draftText = `PHYSICAL EXAMINATION SUMMARY (AI DRAFT):\nInspection: No visible acute lacerations or bony deformity. Palpation demonstrates marked tenderness and bilateral muscle spasm along cervical and lumbar paraspinal musculature. Range of Motion: Cervical extension and lumbar flexion are moderately restricted due to pain. Neurologic: Intact sensation to light touch bilaterally; deep tendon reflexes 2+ symmetrical.`;
+    draftText = inputData?.examFindings
+      ? `PHYSICAL EXAMINATION SUMMARY:\n${inputData.examFindings}`
+      : 'Information not documented in selected records.';
   } else if (promptType === 'ASSESSMENT') {
-    draftText = `ASSESSMENT & PLAN DRAFT (AI DRAFT):\nClinical Diagnoses:\n1. Cervical sprain/strain (ICD-10 S13.4)\n2. Lumbar strain with somatic dysfunction (ICD-10 S33.5)\n3. Myofascial pain syndrome (ICD-10 M79.1)\n\nTreatment Plan:\n- Initiate conservative multi-modality rehabilitation:\n  * JOSMIC Pain Management consultation & re-evaluation in 4 weeks.\n  * DAV'S ESWT radial shockwave therapy (CPT 0101T) x 3 sessions.\n  * ANIK Laser Therapy (CPT 97039) for deep tissue photobiomodulation.\n- Home exercise program with posture ergonomics and heat/ice application.`;
+    draftText = diag
+      ? `CLINICAL ASSESSMENT:\nDocumented diagnoses: ${diag}`
+      : 'Information not documented in selected records.';
   } else {
-    draftText = `CLINICAL SUMMARY (AI DRAFT):\n${patientName} continues to undergo structured multi-provider care for accident-related injuries (${complaints}). Patient demonstrates steady progress with reduced localized tenderness following ongoing laser and shockwave treatment sessions. Physical examination demonstrates gradual improvement in cervical and lumbar mobility.`;
+    draftText = inputData?.summary || (complaints
+      ? `CLINICAL SUMMARY:\nPatient evaluation for documented injury (${complaints}).`
+      : 'Information not documented in selected records.');
   }
 
   return res.status(200).json({
