@@ -466,29 +466,17 @@ Provide clean, concise medical prose with standard medical terminology and ICD-1
     const documentedPlan = inputData?.treatmentPlan || extractSection(/(?:treatmentPlan|goals|futureCare|planFollowUp)[:\s]+([^\n\r]+)/i);
     const documentedFollowUp = inputData?.followUp || extractSection(/(?:followUp|dischargeRecommendations|recommendations)[:\s]+([^\n\r]+)/i);
 
-    draftText = `1. PRESENTING CONCERNS & CHIEF COMPLAINT:
-${inputData?.chiefComplaint || (complaints ? `Patient presents following reported injury: ${complaints}.` : 'Information not documented in selected records.')}
-
-2. SUBJECTIVE HISTORY & PAIN QUALITY:
-${inputData?.painDescription || (locations ? `Symptoms localized to ${locations}.` : 'Information not documented in selected records.')}
-
-3. OBJECTIVE & PHYSICAL EXAMINATION FINDINGS:
-${documentedExam || 'Information not documented in selected records.'}
-
-4. CLINICAL ASSESSMENT & DIAGNOSTIC IMPRESSION:
-${diag ? `Clinical diagnoses documented: ${diag}` : 'Information not documented in selected records.'}
-
-5. TREATMENT & PROCEDURES ADMINISTERED:
-${procedures || (sessions ? `Completed ${sessions} documented treatment session(s) targeting affected anatomical regions.` : 'Information not documented in selected records.')}
-
-6. COURSE OF CARE & CLINICAL PROGRESS:
-${documentedProgress || 'Information not documented in selected records.'}
-
-7. TREATMENT PLAN & THERAPEUTIC GOALS:
-${documentedPlan || 'Information not documented in selected records.'}
-
-8. FOLLOW-UP & DISCHARGE RECOMMENDATIONS / PROGNOSIS:
-${documentedFollowUp || 'Information not documented in selected records.'}`;
+    const jsonResponse = {
+      chiefComplaint: inputData?.chiefComplaint || (complaints ? `Patient presents following reported injury: ${complaints}.` : 'Information not documented in selected records.'),
+      subjectiveHistory: inputData?.painDescription || (locations ? `Symptoms localized to ${locations}.` : 'Information not documented in selected records.'),
+      objectiveFindings: documentedExam || 'Information not documented in selected records.',
+      clinicalAssessment: diag ? `Clinical diagnoses documented: ${diag}` : 'Information not documented in selected records.',
+      treatmentsAdministered: procedures || (sessions ? `Completed ${sessions} documented treatment session(s) targeting affected anatomical regions.` : 'Information not documented in selected records.'),
+      courseOfCare: documentedProgress || 'Information not documented in selected records.',
+      treatmentPlan: documentedPlan || 'Information not documented in selected records.',
+      followUp: documentedFollowUp || 'Information not documented in selected records.'
+    };
+    draftText = JSON.stringify(jsonResponse);
   } else if (promptType === 'HPI') {
     draftText = complaints
       ? `HISTORY OF PRESENT ILLNESS:\nPatient presents for evaluation regarding documented injury: ${complaints}.${locations ? ` Symptoms documented in: ${locations}.` : ''}`
