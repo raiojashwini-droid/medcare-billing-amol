@@ -150,6 +150,7 @@ model Case {
   insuranceAdjusterPhone String?        @map("insurance_adjuster_phone") @db.VarChar(20)
   liabilityStatus        String?        @map("liability_status") @db.VarChar(50)
   caseNotes              String?        @map("case_notes") @db.Text
+  clinicalDocStorage     Json?          @map("clinical_doc_storage")
   assignedProviderIds    Json?          @map("assigned_provider_ids")
   status                 String         @default("OPEN") @db.VarChar(50)
   createdAt              DateTime       @default(now()) @map("created_at")

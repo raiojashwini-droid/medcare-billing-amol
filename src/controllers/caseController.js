@@ -90,6 +90,7 @@ const formatCase = (c) => {
     insuranceAdjusterPhone: c.insuranceAdjusterPhone || '',
     liabilityStatus: c.liabilityStatus || 'PENDING',
     caseNotes: c.caseNotes || '',
+    clinicalDocStorage: typeof c.clinicalDocStorage === 'string' ? JSON.parse(c.clinicalDocStorage) : (c.clinicalDocStorage || {}),
     assignedProviderIds: typeof c.assignedProviderIds === 'string' ? JSON.parse(c.assignedProviderIds) : (c.assignedProviderIds || []),
     status: c.status || 'ACTIVE',
     createdAt: c.createdAt,
@@ -355,6 +356,7 @@ export const updateCase = async (req, res) => {
         ...(data.insuranceAdjusterPhone !== undefined && { insuranceAdjusterPhone: data.insuranceAdjusterPhone }),
         ...(data.liabilityStatus !== undefined && { liabilityStatus: data.liabilityStatus }),
         ...(data.caseNotes !== undefined && { caseNotes: data.caseNotes }),
+        ...(data.clinicalDocStorage !== undefined && { clinicalDocStorage: data.clinicalDocStorage }),
         ...(data.status !== undefined && { status: data.status })
       },
       include: {
