@@ -61,12 +61,39 @@ export const getAttorneys = async (req, res) => {
   try {
     const { search } = req.query;
 
+    // Fetch attorneys from DB
+    let attorneys = await prisma.attorney.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
+    
+    // Seed DB if empty
+    if (attorneys.length === 0) {
+      console.log('Seeding Attorneys...');
+      for (const att of dynamicAttorneys) {
+         await prisma.attorney.create({
+            data: {
+               id: att.id,
+               name: att.name,
+               firm: att.firm,
+               phone: att.phone,
+               email: att.email,
+               address: att.address,
+               caseManager: att.caseManager,
+               lienAgreementType: att.lienAgreementType,
+               status: att.status,
+               rating: att.rating
+            }
+         });
+      }
+      attorneys = await prisma.attorney.findMany({ orderBy: { createdAt: 'desc' } });
+    }
+
     // Get active cases to compute live active case counts per attorney
     const cases = await prisma.case.findMany({
       select: { attorneyName: true, lawFirm: true, status: true }
     });
 
-    const enriched = dynamicAttorneys.map(atty => {
+    const enriched = attorneys.map(atty => {
       const matchedCases = cases.filter(c => 
         (c.attorneyName && c.attorneyName.toLowerCase().includes(atty.name.toLowerCase())) ||
         (c.lawFirm && c.lawFirm.toLowerCase().includes(atty.firm.toLowerCase()))
@@ -83,8 +110,8 @@ export const getAttorneys = async (req, res) => {
       const filtered = enriched.filter(a =>
         a.name.toLowerCase().includes(q) ||
         a.firm.toLowerCase().includes(q) ||
-        a.email.toLowerCase().includes(q) ||
-        a.phone.includes(q)
+        (a.email && a.email.toLowerCase().includes(q)) ||
+        (a.phone && a.phone.includes(q))
       );
       return res.status(200).json(filtered);
     }
@@ -108,25 +135,23 @@ export const createAttorney = async (req, res) => {
       return res.status(400).json({ error: 'Attorney Name and Law Firm Name are required.' });
     }
 
-    const newAttorney = {
-      id: `atty-${Date.now()}`,
-      name: name.trim(),
-      firm: firm.trim(),
-      phone: phone || '',
-      email: email || '',
-      address: address || 'Houston, TX',
-      caseManager: caseManager || '',
-      lienAgreementType: lienAgreementType || 'LETTER_OF_PROTECTION',
-      status: 'ACTIVE',
-      rating: 'New Network Partner',
-      activeCasesCount: 0,
-      createdAt: new Date().toISOString()
-    };
+    const newAttorney = await prisma.attorney.create({
+      data: {
+        name: name.trim(),
+        firm: firm.trim(),
+        phone: phone || '',
+        email: email || '',
+        address: address || 'Houston, TX',
+        caseManager: caseManager || '',
+        lienAgreementType: lienAgreementType || 'LETTER_OF_PROTECTION',
+        status: 'ACTIVE',
+        rating: 'New Network Partner'
+      }
+    });
 
-    dynamicAttorneys.unshift(newAttorney);
     console.log(`⚖️ [NEW ATTORNEY REGISTERED] ${newAttorney.name} (${newAttorney.firm})`);
 
-    return res.status(201).json(newAttorney);
+    return res.status(201).json({ ...newAttorney, activeCasesCount: 0, hasLopOnFile: true });
   } catch (error) {
     console.error('Error creating attorney:', error);
     return res.status(500).json({ error: 'Failed to register new attorney.' });
@@ -140,18 +165,13 @@ export const createAttorney = async (req, res) => {
 export const updateAttorney = async (req, res) => {
   try {
     const { id } = req.params;
-    const index = dynamicAttorneys.findIndex(a => a.id === id);
+    
+    const updated = await prisma.attorney.update({
+      where: { id },
+      data: req.body
+    });
 
-    if (index === -1) {
-      return res.status(404).json({ error: 'Attorney record not found.' });
-    }
-
-    dynamicAttorneys[index] = {
-      ...dynamicAttorneys[index],
-      ...req.body
-    };
-
-    return res.status(200).json(dynamicAttorneys[index]);
+    return res.status(200).json(updated);
   } catch (error) {
     console.error('Error updating attorney:', error);
     return res.status(500).json({ error: 'Failed to update attorney record.' });
