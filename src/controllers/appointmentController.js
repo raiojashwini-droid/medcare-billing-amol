@@ -186,7 +186,7 @@ export const createAppointment = async (req, res) => {
 
     // 3. Resolve Provider ID
     let targetProviderId = data.providerId || 'prov-josmic';
-    let provName = 'Dr. Segun Adeoye (JOSMIC Wellness)';
+    let provName = 'Dr. Segun Adeoye (FM Health and Wellness)';
     const provObj = await prisma.provider.findFirst({
       where: {
         OR: [
@@ -482,7 +482,7 @@ export const autoBookAppointment = async (req, res) => {
 
     // ── Dispatch Automated Confirmation Email & SMS Notification ──
     const patientFullName = `${firstName} ${lastName}`.trim();
-    const providerName = data.providerName || newApt.provider?.name || 'JOSMIC Wellness Center';
+    const providerName = data.providerName || newApt.provider?.name || 'FM Health and Wellness Center';
 
     if (data.patientEmail) {
       // 1. Insert DB log record

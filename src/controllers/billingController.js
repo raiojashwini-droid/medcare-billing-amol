@@ -179,6 +179,7 @@ const formatBill = (b) => {
     attorneyAddress: b.case?.attorneyAddress || b.case?.lawFirmAddress || '',
     status: b.status,
     lineItems: formattedLines,
+    serviceLines: formattedLines,
     totals: parsedTotals,
     totalPayments: parsedTotals.totalPayments || 0,
     balanceDue: parsedTotals.balanceDue || 0,
@@ -391,7 +392,7 @@ export const getFourBillsByCase = async (req, res) => {
       });
     }
 
-    const bills = await prisma.bill.findMany({
+    let bills = await prisma.bill.findMany({
       where: {
         caseId: targetCase.id
       },
@@ -405,6 +406,89 @@ export const getFourBillsByCase = async (req, res) => {
         }
       }
     });
+
+    const existingProvIds = new Set(bills.map(b => b.providerId));
+    const providerIds = ['prov-counselor', 'prov-josmic', 'prov-davs', 'prov-anik', 'prov-tpi', 'prov-tecar'];
+    let createdAny = false;
+
+    for (const provId of providerIds) {
+      if (!existingProvIds.has(provId)) {
+        const providerExists = await prisma.provider.findUnique({ where: { id: provId } });
+        if (!providerExists) continue;
+
+        const defaultLines = getDefaultServiceLinesForProvider(provId, targetCase.accidentDate || targetCase.initialDate);
+        const totalCharges = defaultLines.reduce((acc, l) => acc + ((Number(l.charge) || 0) * (Number(l.units) || 1)), 0);
+        const cleanCaseSuffix = (targetCase.id || 'case').replace(/[^a-zA-Z0-9]/g, '').slice(-6);
+        const billId = `bill-${provId.replace('prov-', '')}-${targetCase.id}`;
+        const prefix = provId.replace('prov-', '').toUpperCase();
+        const randNum = Math.floor(1000 + Math.random() * 9000);
+
+        try {
+          const newBill = await prisma.bill.create({
+            data: {
+              id: billId,
+              caseId: targetCase.id,
+              providerId: provId,
+              invoiceNumber: `INV-${prefix}-${cleanCaseSuffix}-${randNum}`,
+              statementNumber: `${randNum}-${prefix.charAt(0)}`,
+              statementDate: targetCase.initialDate || targetCase.accidentDate || new Date().toISOString().split('T')[0],
+              billToName: targetCase.attorneyName || targetCase.lawFirm || 'OJ LAW FIRM & ASSOCIATES',
+              billToAddress: targetCase.attorneyAddress || targetCase.lawFirmAddress || '11711 Bedford St. Suite 01, Houston TX 77031',
+              status: 'ISSUED',
+              totals: { totalCharges, totalPayments: 0, totalAdjustments: 0, balanceDue: totalCharges },
+              aging: { current: totalCharges, past30: 0, past60: 0, past90: 0 }
+            }
+          });
+
+          for (let i = 0; i < defaultLines.length; i++) {
+            const l = defaultLines[i];
+            const lineCharge = Number(l.charge) || 0;
+            const units = Number(l.units) || 1;
+            await prisma.serviceLine.create({
+              data: {
+                id: `srv-${newBill.id}-${i + 1}`,
+                billId: newBill.id,
+                dos: l.dos || targetCase.accidentDate || targetCase.initialDate || new Date().toISOString().split('T')[0],
+                dateOfService: l.dos || targetCase.accidentDate || targetCase.initialDate || new Date().toISOString().split('T')[0],
+                placeOfService: '11',
+                cptCode: l.cptCode,
+                description: l.description,
+                modifier1: l.modifier1 || null,
+                modifier2: l.modifier2 || null,
+                units: units,
+                charge: lineCharge,
+                insurancePayment: 0,
+                patientPayment: 0,
+                otherPayment: 0,
+                adjustments: 0,
+                balance: lineCharge * units,
+                lineBalance: lineCharge * units
+              }
+            });
+          }
+          createdAny = true;
+        } catch (createErr) {
+          console.warn(`Could not auto-generate bill for provider ${provId}:`, createErr.message);
+        }
+      }
+    }
+
+    if (createdAny) {
+      bills = await prisma.bill.findMany({
+        where: {
+          caseId: targetCase.id
+        },
+        include: {
+          serviceLines: true,
+          provider: true,
+          case: {
+            include: {
+              patient: true
+            }
+          }
+        }
+      });
+    }
 
     return res.status(200).json({
       caseId: targetCase.caseId || targetCase.id,
@@ -1154,7 +1238,7 @@ export const getPaymentsList = async (req, res) => {
     const formatted = transactions.map(t => ({
       id: t.id,
       date: t.createdAt.toISOString().split('T')[0],
-      provider: t.bill?.provider?.name || 'JOSMIC Wellness Center',
+      provider: t.bill?.provider?.name || 'FM Health and Wellness Center',
       patient: t.bill?.case?.patient ? `${t.bill.case.patient.firstName} ${t.bill.case.patient.lastName}`.trim() : 'SAMPLE TESTING',
       type: formatPayerType(t),
       amount: Number(t.amount),

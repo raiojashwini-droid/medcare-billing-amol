@@ -109,7 +109,7 @@ export const uploadDocument = async (req, res) => {
         name: data.name,
         documentType: data.documentType || data.type || 'Medical Records',
         type: data.type || data.documentType || 'Medical Records',
-        providerName: data.providerName || 'JOSMIC Wellness Center',
+        providerName: data.providerName || 'FM Health and Wellness Center',
         date: data.date || currentDateStr,
         status: data.status || 'UPLOADED',
         size: data.size || '1.2 MB',

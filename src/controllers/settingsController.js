@@ -48,9 +48,9 @@ export const DEFAULT_SETTINGS = {
 
   // Core Modalities & Services
   modalities: [
-    { id: 'pain-mgmt', name: 'Pain Management', providerId: 'prov-josmic', providerName: 'JOSMIC Wellness Center', enabled: true, cpt: '99204', fee: '$1,214.00', duration: '60 min', template: 'JOSMIC Pain Evaluation', status: 'COMPLETE' },
-    { id: 'laser-therapy', name: 'Laser Therapy', providerId: 'prov-anik', providerName: 'ANIK Laser Therapy', enabled: true, cpt: '97039', fee: '$2,000.00', duration: '45 min', template: 'ANIK Laser Procedure Form', status: 'COMPLETE' },
-    { id: 'shockwave-therapy', name: 'Shockwave Therapy', providerId: 'prov-davs', providerName: "DAV'S Anatomy", enabled: true, cpt: '0101T', fee: '$1,000.00', duration: '30 min', template: "DAV'S ESWT Therapy Record", status: 'COMPLETE' },
+    { id: 'pain-mgmt', name: 'Pain Management', providerId: 'prov-josmic', providerName: 'FM Health and Wellness Center', enabled: true, cpt: '99204', fee: '$1,214.00', duration: '60 min', template: 'FM Health and Wellness Pain Evaluation', status: 'COMPLETE' },
+    { id: 'laser-therapy', name: 'Laser Therapy', providerId: 'prov-anik', providerName: 'FM Laser Therapy', enabled: true, cpt: '97039', fee: '$2,000.00', duration: '45 min', template: 'FM Laser Therapy Procedure Form', status: 'COMPLETE' },
+    { id: 'shockwave-therapy', name: 'Shockwave Therapy', providerId: 'prov-davs', providerName: "FM Dav’s Anatomy", enabled: true, cpt: '0101T', fee: '$1,000.00', duration: '30 min', template: "FM Dav’s ESWT Therapy Record", status: 'COMPLETE' },
     { id: 'trigger-point', name: 'Trigger Point Injection', providerId: '', providerName: 'Unassigned (Provider Assignment Required)', enabled: false, cpt: '20552', fee: 'Pricing Pending', duration: '30 min', template: 'Trigger Point Form (Pending)', status: 'CONFIGURATION_PENDING' },
     { id: 'tecar-therapy', name: 'TECAR Therapy', providerId: '', providerName: 'Unassigned (Provider Assignment Required)', enabled: false, cpt: '97039-RF', fee: 'Pricing Pending', duration: '45 min', template: 'TECAR Procedure Form (Pending)', status: 'CONFIGURATION_PENDING' },
     { id: 'counseling', name: 'Counseling & Mental Health', providerId: 'prov-counselor', providerName: 'Counselor Practice (Hope Behavioral Health)', enabled: true, cpt: '90834 / 90791', fee: '$180.00 - $350.00', duration: '45 min', template: 'Behavioral Health Progress Note', status: 'COMPLETE' }

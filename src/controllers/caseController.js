@@ -15,17 +15,50 @@ const formatCase = (c) => {
   let caseTotalBilling = 0;
   let uniqueProviders = new Set();
   
-  if (c.bills && Array.isArray(c.bills)) {
-    c.bills.forEach(bill => {
-      uniqueProviders.add(bill.providerId);
-      if (bill.totals) {
-        const t = typeof bill.totals === 'string' ? JSON.parse(bill.totals) : bill.totals;
-        if (t.totalCharges) {
-          caseTotalBilling += parseFloat(t.totalCharges) || 0;
-        }
-      }
-    });
-  }
+  const formattedBills = (c.bills && Array.isArray(c.bills)) ? c.bills.map(bill => {
+    uniqueProviders.add(bill.providerId);
+    let parsedTotals = typeof bill.totals === 'string' ? (() => { try { return JSON.parse(bill.totals); } catch(e) { return {}; } })() : (bill.totals || {});
+    if (parsedTotals.totalCharges) {
+      caseTotalBilling += parseFloat(parsedTotals.totalCharges) || 0;
+    }
+
+    const rawLines = bill.serviceLines || [];
+    const formattedLines = rawLines.map(l => ({
+      dos: l.dos || l.dateOfService || '',
+      dateOfService: l.dateOfService || l.dos || '',
+      cptCode: l.cptCode || '',
+      description: l.description || '',
+      modifier1: l.modifier1 || '',
+      modifier2: l.modifier2 || '',
+      modifier3: l.modifier3 || '',
+      modifier4: l.modifier4 || '',
+      diagPointer: l.diagPointer || l.diagnosisPointer || '',
+      placeOfService: l.placeOfService || '11',
+      units: l.units || 1,
+      charge: Number(l.charge) || 0,
+      payments: {
+        insurance: Number(l.insurancePayment) || 0,
+        patient: Number(l.patientPayment) || 0,
+        other: Number(l.otherPayment) || 0
+      },
+      adjustments: Number(l.adjustments) || 0,
+      balance: Number(l.balance) || 0,
+      lineBalance: Number(l.lineBalance) || 0
+    }));
+
+    return {
+      ...bill,
+      totals: parsedTotals,
+      totalPayments: parsedTotals.totalPayments || 0,
+      balanceDue: parsedTotals.balanceDue !== undefined ? parsedTotals.balanceDue : (parsedTotals.totalCharges || 0),
+      serviceLines: formattedLines,
+      lineItems: formattedLines,
+      renderingProvider: typeof bill.renderingProvider === 'string' ? (() => { try { return JSON.parse(bill.renderingProvider); } catch(e) { return {}; } })() : (bill.renderingProvider || {}),
+      billingProvider: typeof bill.billingProvider === 'string' ? (() => { try { return JSON.parse(bill.billingProvider); } catch(e) { return {}; } })() : (bill.billingProvider || {}),
+      identifiers: typeof bill.identifiers === 'string' ? (() => { try { return JSON.parse(bill.identifiers); } catch(e) { return {}; } })() : (bill.identifiers || {}),
+      serviceFacility: typeof bill.serviceFacility === 'string' ? (() => { try { return JSON.parse(bill.serviceFacility); } catch(e) { return {}; } })() : (bill.serviceFacility || {})
+    };
+  }) : [];
 
   return {
     id: c.id,
@@ -94,7 +127,7 @@ const formatCase = (c) => {
     assignedProviderIds: typeof c.assignedProviderIds === 'string' ? JSON.parse(c.assignedProviderIds) : (c.assignedProviderIds || []),
     status: c.status || 'ACTIVE',
     createdAt: c.createdAt,
-    bills: c.bills || [],
+    bills: formattedBills,
     appointments: c.appointments || [],
     clinicalNotes: c.clinicalNotes || [],
     caseTotalBilling,
@@ -130,7 +163,11 @@ export const getCases = async (req, res) => {
       where,
       include: {
         patient: true,
-        bills: true,
+        bills: {
+          include: {
+            serviceLines: true
+          }
+        },
         appointments: { orderBy: { createdAt: 'desc' } },
         clinicalNotes: { orderBy: { createdAt: 'desc' } }
       },
@@ -167,7 +204,11 @@ export const getCaseById = async (req, res) => {
       },
       include: {
         patient: true,
-        bills: true,
+        bills: {
+          include: {
+            serviceLines: true
+          }
+        },
         appointments: { orderBy: { createdAt: 'desc' } },
         clinicalNotes: { orderBy: { createdAt: 'desc' } }
       }
@@ -360,13 +401,14 @@ export const updateCase = async (req, res) => {
         ...(data.status !== undefined && { status: data.status })
       },
       include: {
-        patient: {
-          select: {
-            firstName: true,
-            middleName: true,
-            lastName: true
+        patient: true,
+        bills: {
+          include: {
+            serviceLines: true
           }
-        }
+        },
+        appointments: { orderBy: { createdAt: 'desc' } },
+        clinicalNotes: { orderBy: { createdAt: 'desc' } }
       }
     });
 
