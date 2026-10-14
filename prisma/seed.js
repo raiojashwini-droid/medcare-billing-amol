@@ -340,7 +340,7 @@ async function main() {
     },
     {
       id: 'prov-counselor',
-      name: 'Counselor Practice (Hope Behavioral Health)',
+      name: 'FM Counselor Practice (Hope Behavioral Health)',
       businessName: 'Hope Behavioral Health & Counseling LLC',
       serviceCategory: 'Counseling & Mental Health',
       status: 'ACTIVE',
@@ -376,7 +376,7 @@ async function main() {
     },
     {
       id: 'prov-tpi',
-      name: 'Trigger Point Injection Practice',
+      name: 'FM Trigger Point Injection Practice',
       businessName: 'Trigger Point Injection Practice LLC',
       serviceCategory: 'Trigger Point Injection (TPI)',
       status: 'ACTIVE',
@@ -410,7 +410,7 @@ async function main() {
     },
     {
       id: 'prov-tecar',
-      name: 'TECAR Radiofrequency Practice',
+      name: 'FM TECAR Radiofrequency Practice',
       businessName: 'TECAR Radiofrequency LLC',
       serviceCategory: 'TECAR Radiofrequency Therapy',
       status: 'ACTIVE',
