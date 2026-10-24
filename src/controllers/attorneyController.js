@@ -50,6 +50,18 @@ let dynamicAttorneys = [
     lienAgreementType: 'LETTER_OF_PROTECTION',
     status: 'ACTIVE',
     rating: 'Top Tier Partner'
+  },
+  {
+    id: 'atty-5',
+    name: 'Sope Lawson, Esq.',
+    firm: 'Law Office of Sope Lawson',
+    phone: '713-555-0725',
+    email: 'info@sopelawsonlaw.com',
+    address: '8303 Southwest Fwy #725, Houston, TX 77074',
+    caseManager: 'Office Staff (713-555-0725)',
+    lienAgreementType: 'LETTER_OF_PROTECTION',
+    status: 'ACTIVE',
+    rating: 'Preferred'
   }
 ];
 

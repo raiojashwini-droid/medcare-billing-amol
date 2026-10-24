@@ -158,9 +158,9 @@ async function main() {
         zipCode: '77063'
       },
       contact: {
-        phone: '713-485-5712',
+        phone: '346-338-7020',
         cell: '',
-        fax: '832-416-1502',
+        fax: '',
         email: 'contact@josmicwellness.com'
       },
       identifiers: {
@@ -182,7 +182,7 @@ async function main() {
       billingProvider: {
         name: 'FM Health and Wellness Center',
         address: '9900 Westpark Dr, Houston, TX 77063',
-        phone: '713-485-5712'
+        phone: '346-338-7020'
       },
       defaultPlaceOfService: '11',
       availableServices: [
@@ -223,9 +223,9 @@ async function main() {
         zipCode: '77063'
       },
       contact: {
-        phone: '713-485-0208',
-        cell: '832-815-0959',
-        fax: '832-416-1502',
+        phone: '346-338-7020',
+        cell: '',
+        fax: '',
         email: 'Davsanatomy@gmail.com'
       },
       identifiers: {
@@ -247,7 +247,7 @@ async function main() {
       billingProvider: {
         name: 'FM Dav’s Anatomy',
         address: '9900 Westpark Dr, Houston, TX 77063',
-        phone: '832-815-0959'
+        phone: '346-338-7020'
       },
       defaultPlaceOfService: '10',
       availableServices: [
@@ -288,9 +288,9 @@ async function main() {
         zipCode: '77063'
       },
       contact: {
-        phone: '713-485-5712',
-        cell: '832-815-0959',
-        fax: '832-416-1502',
+        phone: '346-338-7020',
+        cell: '',
+        fax: '',
         email: 'Aniklasertherapy@gmail.com'
       },
       identifiers: {
@@ -312,7 +312,7 @@ async function main() {
       billingProvider: {
         name: 'FM Laser Therapy',
         address: '9900 Westpark Dr, Houston, TX 77063',
-        phone: '832-815-0959'
+        phone: '346-338-7020'
       },
       defaultPlaceOfService: '11',
       availableServices: [
@@ -345,11 +345,11 @@ async function main() {
       serviceCategory: 'Counseling & Mental Health',
       status: 'ACTIVE',
       address: { street: '10101 Harwin Dr.', suite: 'Suite 774-C', city: 'Houston', state: 'TX', zipCode: '77036' },
-      contact: { phone: '713-555-0188', fax: '832-555-0199', email: 'intake@hopebehavioralhealth.com' },
+      contact: { phone: '346-338-7020', fax: '', email: 'intake@hopebehavioralhealth.com' },
       identifiers: { taxId: '84-7891234', npi: '1487965213', ssnOrEin: 'EIN' },
       renderingProvider: { name: 'Jordan Miller', credentials: 'LCSW, BCD', providerId: 'R7640', npi: '1487965213' },
       serviceFacility: { name: 'Hope Behavioral Health Clinic', address: '10101 Harwin Dr, Suite 774-C, Houston, TX 77036', npi: '1487965213' },
-      billingProvider: { name: 'Hope Behavioral Health LLC', address: '10101 Harwin Dr, Suite 774-C, Houston, TX 77036', phone: '713-555-0188' },
+      billingProvider: { name: 'Hope Behavioral Health LLC', address: '10101 Harwin Dr, Suite 774-C, Houston, TX 77036', phone: '346-338-7020' },
       defaultPlaceOfService: '11',
       availableServices: [
         { code: '90791', description: 'Psychiatric Diagnostic Evaluation', defaultCharge: 350.00, category: 'Evaluation' },
@@ -380,12 +380,12 @@ async function main() {
       businessName: 'Trigger Point Injection Practice LLC',
       serviceCategory: 'Trigger Point Injection (TPI)',
       status: 'ACTIVE',
-      address: { street: '10101 Harwin Dr.', suite: 'Suite 274', city: 'Houston', state: 'TX', zipCode: '77036' },
-      contact: { phone: '713-485-5712', fax: '832-416-1502', email: 'tpi@example.test' },
+      address: { street: '9900 Westpark Dr', suite: 'Suite 354', city: 'Houston', state: 'TX', zipCode: '77063' },
+      contact: { phone: '346-338-7020', fax: '', email: 'tpi@example.test' },
       identifiers: { taxId: '993723389', npi: '1982347563', ssnOrEin: 'EIN' },
       renderingProvider: { name: 'Adeoye, Segun', credentials: 'DC / MD', providerId: 'R7641', npi: '1982347563' },
-      serviceFacility: { name: 'Trigger Point Clinic', address: '10101 Harwin Dr, Suite 320, Houston, TX 77036', npi: '1982347563' },
-      billingProvider: { name: 'Trigger Point Practice', address: '10101 Harwin Dr, Suite 320, Houston, TX 77036', phone: '713-485-5712' },
+      serviceFacility: { name: 'Trigger Point Clinic', address: '9900 Westpark Dr, Suite 354, Houston, TX 77063', npi: '1982347563' },
+      billingProvider: { name: 'Trigger Point Practice', address: '9900 Westpark Dr, Suite 354, Houston, TX 77063', phone: '346-338-7020' },
       defaultPlaceOfService: '11',
       availableServices: [
         { code: '20552', description: 'Trigger Point Injection (1-2 muscles)', defaultCharge: 450.00, category: 'Therapy' }
@@ -415,11 +415,11 @@ async function main() {
       serviceCategory: 'TECAR Radiofrequency Therapy',
       status: 'ACTIVE',
       address: { street: '10101 Harwin Dr.', suite: 'Suite 274', city: 'Houston', state: 'TX', zipCode: '77036' },
-      contact: { phone: '713-485-5712', fax: '832-416-1502', email: 'tecar@example.test' },
+      contact: { phone: '346-338-7020', fax: '', email: 'tecar@example.test' },
       identifiers: { taxId: '993723390', npi: '1789234560', ssnOrEin: 'EIN' },
       renderingProvider: { name: 'Adeoye, Segun', credentials: 'DC', providerId: 'R7642', npi: '1789234560' },
       serviceFacility: { name: 'TECAR Clinic', address: '10101 Harwin Dr, Suite 320, Houston, TX 77036', npi: '1789234560' },
-      billingProvider: { name: 'TECAR Practice', address: '10101 Harwin Dr, Suite 320, Houston, TX 77036', phone: '713-485-5712' },
+      billingProvider: { name: 'TECAR Practice', address: '10101 Harwin Dr, Suite 320, Houston, TX 77036', phone: '346-338-7020' },
       defaultPlaceOfService: '11',
       availableServices: [
         { code: '97024', description: 'Diathermy (e.g., microwave)', defaultCharge: 250.00, category: 'Therapy' }

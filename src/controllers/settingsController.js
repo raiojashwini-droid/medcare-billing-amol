@@ -9,7 +9,7 @@ export const DEFAULT_SETTINGS = {
   npi: '1234567890',
   taxId: '75-1234567',
   licenseNumber: 'TX-MED-98765',
-  practicePhone: '713-485-5700',
+  practicePhone: '346-338-7020',
   practiceEmail: 'admin@medpracticepro.com',
   practiceAddress: '10101 Harwin Dr.',
   practiceCity: 'Houston',

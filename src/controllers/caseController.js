@@ -106,6 +106,8 @@ const formatCase = (c) => {
       }
     })(),
     injuryBodyParts: c.injuryBodyParts || '',
+    selectedInjuryAreas: typeof p.selectedInjuryAreas === 'string' ? JSON.parse(p.selectedInjuryAreas) : (p.selectedInjuryAreas || []),
+    otherInjuryAreaSpecify: p.otherInjuryAreaSpecify || '',
     diagnosisCodes: dxList,
     referringProviderName: c.referringProviderName || '',
     referringProviderNpi: c.referringProviderNpi || '',
@@ -361,9 +363,21 @@ export const updateCase = async (req, res) => {
       }
     });
 
-    if (!existing) {
-      return res.status(404).json({ error: 'Case not found.' });
+    if (data.selectedInjuryAreas !== undefined || data.otherInjuryAreaSpecify !== undefined) {
+      await prisma.patient.update({
+        where: { id: existing.patientId },
+        data: {
+          ...(data.selectedInjuryAreas !== undefined && { selectedInjuryAreas: data.selectedInjuryAreas }),
+          ...(data.otherInjuryAreaSpecify !== undefined && { otherInjuryAreaSpecify: data.otherInjuryAreaSpecify })
+        }
+      });
     }
+
+    const computedInjuryBodyParts = data.injuryBodyParts !== undefined
+      ? data.injuryBodyParts
+      : (data.selectedInjuryAreas !== undefined
+        ? (Array.isArray(data.selectedInjuryAreas) ? data.selectedInjuryAreas.join(', ') : String(data.selectedInjuryAreas))
+        : undefined);
 
     const updated = await prisma.case.update({
       where: { id: existing.id },
@@ -380,7 +394,7 @@ export const updateCase = async (req, res) => {
         ...(data.emergencyTransport !== undefined && { emergencyTransport: data.emergencyTransport }),
         ...(data.chiefComplaint !== undefined && { chiefComplaint: data.chiefComplaint }),
         ...(data.painDescription !== undefined && { painDescription: Array.isArray(data.painDescription) ? JSON.stringify(data.painDescription) : JSON.stringify([data.painDescription]) }),
-        ...(data.injuryBodyParts !== undefined && { injuryBodyParts: data.injuryBodyParts }),
+        ...(computedInjuryBodyParts !== undefined && { injuryBodyParts: computedInjuryBodyParts }),
         ...(data.diagnosisCodes !== undefined && { diagnosisCodes: data.diagnosisCodes }),
         ...(data.referringProviderName !== undefined && { referringProviderName: data.referringProviderName }),
         ...(data.referringProviderNpi !== undefined && { referringProviderNpi: data.referringProviderNpi }),

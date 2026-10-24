@@ -276,7 +276,7 @@ const getDefaultServiceLinesForProvider = (providerId, accidentDateStr) => {
           modifier1: 'GP',
           modifier2: '',
           units: 8,
-          charge: 8000.00,
+          charge: 1000.00,
           dos
         }
       ];
@@ -289,7 +289,7 @@ const getDefaultServiceLinesForProvider = (providerId, accidentDateStr) => {
           modifier1: 'GP',
           modifier2: 'RT',
           units: 6,
-          charge: 12000.00,
+          charge: 2000.00,
           dos
         },
         {

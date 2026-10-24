@@ -391,6 +391,14 @@ export const updatePatient = async (req, res) => {
       }
     });
 
+    if (updates.selectedInjuryAreas !== undefined) {
+      const partsStr = Array.isArray(updates.selectedInjuryAreas) ? updates.selectedInjuryAreas.join(', ') : String(updates.selectedInjuryAreas);
+      await prisma.case.updateMany({
+        where: { patientId: existing.id },
+        data: { injuryBodyParts: partsStr }
+      });
+    }
+
     if (updates.referringProvider !== undefined || updates.referringProviderName !== undefined || updates.referringProviderNpi !== undefined) {
       const refName = updates.referringProvider || updates.referringProviderName;
       const refNpi = updates.referringProviderNpi;
