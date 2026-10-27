@@ -65,6 +65,7 @@ const formatBill = (b) => {
     const othPay = Number(l.otherPayment) || 0;
 
     return {
+      id: l.id,
       dos: l.dos || l.dateOfService || '',
       dateOfService: l.dateOfService || l.dos || '',
       cptCode: l.cptCode,
@@ -304,26 +305,8 @@ const getDefaultServiceLinesForProvider = (providerId, accidentDateStr) => {
       ];
 
     case 'prov-counselor':
-      return [
-        {
-          cptCode: '90791',
-          description: 'Psychiatric Diagnostic Evaluation & Motor Vehicle Accident Trauma Assessment',
-          modifier1: '',
-          modifier2: '',
-          units: 1,
-          charge: 350.00,
-          dos
-        },
-        {
-          cptCode: '90834',
-          description: 'Individual Psychotherapy 45 min for Vehicular Phobia & Accident-Related PTSD (4 Sessions)',
-          modifier1: '',
-          modifier2: '',
-          units: 4,
-          charge: 790.00,
-          dos
-        }
-      ];
+      // Counseling visits must reflect actual recorded clinical sessions, never auto-assigned
+      return [];
 
     case 'prov-tpi':
       return [
@@ -605,6 +588,42 @@ export const createBill = async (req, res) => {
           ? data.diagnosisCodes.split(/[,;\n]+/).map(d => d.trim()).filter(Boolean)
           : data.diagnosisCodes;
       }
+      // If existing bill has no service lines but user provided lines to initialize it
+      if ((!existing.serviceLines || existing.serviceLines.length === 0) && Array.isArray(data.serviceLines) && data.serviceLines.length > 0) {
+        for (const item of data.serviceLines) {
+          const lineId = item.id || `srv-l-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+          const chargeAmount = parseFloat(item.charge) || 0.00;
+          await prisma.serviceLine.create({
+            data: {
+              id: lineId,
+              billId: existing.id,
+              dos: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
+              dateOfService: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
+              placeOfService: item.placeOfService || '11',
+              cptCode: item.cptCode || '90834',
+              description: item.description || 'Medical / Behavioral Service',
+              units: parseInt(item.units) || 1,
+              charge: chargeAmount,
+              balance: chargeAmount,
+              lineBalance: chargeAmount,
+              insurancePayment: 0.00,
+              patientPayment: 0.00,
+              otherPayment: 0.00,
+              adjustments: 0.00
+            }
+          });
+        }
+        await recalculateBillTotals(existing.id);
+        const refreshed = await prisma.bill.findUnique({
+          where: { id: existing.id },
+          include: {
+            serviceLines: true,
+            provider: true,
+            case: { include: { patient: true } }
+          }
+        });
+        return res.status(200).json(formatBill(refreshed));
+      }
       return res.status(200).json(formatBill(existing));
     }
 
@@ -633,7 +652,43 @@ export const createBill = async (req, res) => {
       }
     });
 
-    return res.status(201).json(formatBill(newBill));
+    if (Array.isArray(data.serviceLines) && data.serviceLines.length > 0) {
+      for (const item of data.serviceLines) {
+        const lineId = item.id || `srv-l-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const chargeAmount = parseFloat(item.charge) || 0.00;
+        await prisma.serviceLine.create({
+          data: {
+            id: lineId,
+            billId: newBill.id,
+            dos: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
+            dateOfService: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
+            placeOfService: item.placeOfService || '11',
+            cptCode: item.cptCode || '90834',
+            description: item.description || 'Medical / Behavioral Service',
+            units: parseInt(item.units) || 1,
+            charge: chargeAmount,
+            balance: chargeAmount,
+            lineBalance: chargeAmount,
+            insurancePayment: 0.00,
+            patientPayment: 0.00,
+            otherPayment: 0.00,
+            adjustments: 0.00
+          }
+        });
+      }
+      await recalculateBillTotals(newBill.id);
+    }
+
+    const finalBill = await prisma.bill.findUnique({
+      where: { id: newBill.id },
+      include: {
+        serviceLines: true,
+        provider: true,
+        case: { include: { patient: true } }
+      }
+    });
+
+    return res.status(201).json(formatBill(finalBill || newBill));
   } catch (error) {
     console.error('Error creating bill statement:', error);
     return res.status(500).json({ error: 'Failed to generate bill statement.' });
@@ -1453,7 +1508,7 @@ export const updateBill = async (req, res) => {
       return res.status(404).json({ error: 'Bill not found' });
     }
 
-    if (Array.isArray(lineItems) && lineItems.length > 0) {
+    if (Array.isArray(lineItems)) {
       await prisma.serviceLine.deleteMany({ where: { billId: id } });
       for (const line of lineItems) {
         await prisma.serviceLine.create({
@@ -1522,6 +1577,448 @@ export const updateBill = async (req, res) => {
 };
 
 /**
+ * GET /api/billing/counseling-visits/:patientId
+ * Get recorded counseling visits for a patient with billing and clinical note status
+ */
+export const getCounselingVisitsForPatient = async (req, res) => {
+  const { patientId } = req.params;
+  const { caseId } = req.query;
+
+  try {
+    // 1. Resolve patient
+    const patient = await prisma.patient.findFirst({
+      where: {
+        OR: [{ id: patientId }, { patientId: patientId }]
+      },
+      include: {
+        cases: true
+      }
+    });
+
+    if (!patient) {
+      return res.status(200).json({
+        patientId,
+        caseId: caseId || null,
+        patientName: '',
+        totalRecorded: 0,
+        completedCount: 0,
+        uncompletedCount: 0,
+        billedCount: 0,
+        billableCount: 0,
+        visits: [],
+        counselorBill: null
+      });
+    }
+
+    const resolvedPatientId = patient.id;
+    const targetCase = caseId 
+      ? patient.cases.find(c => c.id === caseId || c.caseId === caseId) || patient.cases[0]
+      : patient.cases[0];
+
+    // 2. Find counseling appointments/visits for this patient
+    const visits = await prisma.appointment.findMany({
+      where: {
+        patientId: resolvedPatientId,
+        OR: [
+          { providerId: 'prov-counselor' },
+          { appointmentType: { contains: 'Psychotherapy' } },
+          { appointmentType: { contains: 'Counseling' } },
+          { cptCode: { in: ['90791', '90834', '90837', '90832', '90847', '90853'] } }
+        ]
+      },
+      orderBy: { date: 'asc' }
+    });
+
+    // 3. Find clinical notes for this patient and prov-counselor
+    const notes = await prisma.clinicalNote.findMany({
+      where: {
+        patientId: resolvedPatientId,
+        OR: [
+          { providerId: 'prov-counselor' },
+          { noteType: { contains: 'COUNSEL' } }
+        ]
+      }
+    });
+
+    // 4. Find existing counselor bills for this case/patient
+    const caseIdFilter = targetCase ? targetCase.id : undefined;
+    const counselorBills = await prisma.bill.findMany({
+      where: {
+        providerId: 'prov-counselor',
+        ...(caseIdFilter ? { caseId: caseIdFilter } : { case: { patientId: resolvedPatientId } })
+      },
+      include: {
+        serviceLines: true
+      }
+    });
+
+    // Build map of billed visit IDs across bills
+    const billedMap = new Map();
+    counselorBills.forEach(b => {
+      (b.serviceLines || []).forEach(l => {
+        visits.forEach(v => {
+          if (l.id.includes(v.id) || (l.dos === v.date && l.cptCode === v.cptCode && !billedMap.has(v.id))) {
+            billedMap.set(v.id, {
+              billId: b.id,
+              invoiceNumber: b.invoiceNumber,
+              serviceLineId: l.id,
+              statementNumber: b.statementNumber
+            });
+          }
+        });
+      });
+    });
+
+    // Map each visit with clear flags
+    let completedCount = 0;
+    let uncompletedCount = 0;
+    let billedCount = 0;
+    let billableCount = 0;
+
+    const formattedVisits = visits.map((v, index) => {
+      const isCompleted = v.status === 'COMPLETED' || v.status === 'Completed';
+      if (isCompleted) completedCount++;
+      else uncompletedCount++;
+
+      const billingInfo = billedMap.get(v.id) || null;
+      const isBilled = !!billingInfo;
+      if (isBilled) billedCount++;
+
+      // Billable: Completed AND not yet billed
+      const isEligible = isCompleted;
+      if (isEligible && !isBilled) billableCount++;
+
+      // Match clinical note
+      const matchingNote = notes.find(n => {
+        const parsedContent = typeof n.content === 'string' ? (() => { try { return JSON.parse(n.content); } catch(e){ return {}; } })() : (n.content || {});
+        return parsedContent.appointmentId === v.id || 
+               (n.date === v.date && parsedContent.cptCode === v.cptCode) ||
+               (n.title && n.title.includes(v.id));
+      });
+
+      let fee = 180.00;
+      if (v.cptCode === '90791') fee = 350.00;
+      else if (v.cptCode === '90837') fee = 240.00;
+      else if (v.cptCode === '90832') fee = 120.00;
+      else if (v.cptCode === '90847') fee = 220.00;
+
+      return {
+        id: v.id,
+        sessionNumber: index + 1,
+        date: v.date,
+        startTime: v.startTime,
+        endTime: v.endTime,
+        status: v.status,
+        cptCode: v.cptCode || '90834',
+        appointmentType: v.appointmentType || 'Individual Psychotherapy',
+        reasonForVisit: v.reasonForVisit || '',
+        fee,
+        isCompleted,
+        isEligibleForBilling: isEligible,
+        isBilled,
+        billingInfo,
+        hasNote: !!matchingNote,
+        noteId: matchingNote?.id || null,
+        noteStatus: matchingNote?.status || null,
+        noteTitle: matchingNote?.title || null
+      };
+    });
+
+    const primaryCounselorBill = counselorBills[0] ? formatBill(counselorBills[0]) : null;
+
+    return res.status(200).json({
+      patientId: resolvedPatientId,
+      caseId: targetCase ? targetCase.id : null,
+      patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+      totalRecorded: visits.length,
+      completedCount,
+      uncompletedCount,
+      billedCount,
+      billableCount,
+      visits: formattedVisits,
+      counselorBill: primaryCounselorBill
+    });
+  } catch (error) {
+    console.error('Error fetching counseling visits:', error);
+    return res.status(500).json({ error: 'Failed to fetch counseling visits.' });
+  }
+};
+
+/**
+ * POST /api/billing/counseling-visits
+ * Manually record a new counseling visit for a patient
+ */
+export const recordCounselingVisit = async (req, res) => {
+  const data = req.body;
+
+  if (!data.patientId || !data.date) {
+    return res.status(400).json({ error: 'patientId and date are required.' });
+  }
+
+  try {
+    const patient = await prisma.patient.findFirst({
+      where: {
+        OR: [{ id: data.patientId }, { patientId: data.patientId }]
+      },
+      include: { cases: true }
+    });
+
+    if (!patient) {
+      return res.status(404).json({ error: 'Patient not found' });
+    }
+
+    let targetCaseId = data.caseId;
+    if (!targetCaseId && patient.cases?.length > 0) {
+      targetCaseId = patient.cases[0].id;
+    }
+
+    const generatedId = `apt-coun-${Date.now()}`;
+    const cpt = data.cptCode || '90834';
+    let aptType = 'Individual Psychotherapy (45 Min)';
+    if (cpt === '90791') aptType = 'Psychiatric Diagnostic Evaluation (Intake)';
+    else if (cpt === '90837') aptType = 'Individual Psychotherapy (60 Min)';
+    else if (cpt === '90832') aptType = 'Individual Psychotherapy (30 Min)';
+    else if (cpt === '90847') aptType = 'Family Psychotherapy (50 Min)';
+
+    const newVisit = await prisma.appointment.create({
+      data: {
+        id: generatedId,
+        patientId: patient.id,
+        caseId: targetCaseId,
+        providerId: 'prov-counselor',
+        date: data.date,
+        startTime: data.startTime || '10:00 AM',
+        endTime: data.endTime || '10:45 AM',
+        status: data.status || 'COMPLETED',
+        appointmentType: data.appointmentType || aptType,
+        cptCode: cpt,
+        bookingChannel: 'Counseling Staff Entry',
+        reasonForVisit: data.reasonForVisit || 'Accident-related trauma & psychotherapy counseling',
+        location: data.location || 'Counseling Suite 104'
+      }
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Counseling visit recorded successfully.',
+      visit: newVisit
+    });
+  } catch (error) {
+    console.error('Error recording counseling visit:', error);
+    return res.status(500).json({ error: 'Failed to record counseling visit.' });
+  }
+};
+
+/**
+ * POST /api/billing/counseling-visits/sync-bill
+ * Manually select which eligible completed counseling visits are included in the bill statement
+ */
+export const syncCounselingBill = async (req, res) => {
+  const { patientId, caseId, billId, selectedVisitIds } = req.body;
+
+  if (!Array.isArray(selectedVisitIds)) {
+    return res.status(400).json({ error: 'selectedVisitIds must be an array of visit IDs.' });
+  }
+
+  try {
+    // 1. Resolve patient and case
+    const patient = await prisma.patient.findFirst({
+      where: {
+        OR: [{ id: patientId }, { patientId: patientId }]
+      },
+      include: { cases: true }
+    });
+
+    if (!patient) {
+      return res.status(404).json({ error: 'Patient not found' });
+    }
+
+    const targetCase = caseId
+      ? patient.cases.find(c => c.id === caseId || c.caseId === caseId) || patient.cases[0]
+      : patient.cases[0];
+
+    if (!targetCase) {
+      return res.status(400).json({ error: 'No active case found for this patient.' });
+    }
+
+    // 2. Fetch the visits to be billed
+    const visits = await prisma.appointment.findMany({
+      where: {
+        id: { in: selectedVisitIds },
+        patientId: patient.id
+      }
+    });
+
+    // 3. Validation: ONLY COMPLETED visits can be billed
+    const ineligibles = visits.filter(v => v.status !== 'COMPLETED' && v.status !== 'Completed');
+    if (ineligibles.length > 0) {
+      return res.status(400).json({
+        error: `Cannot bill uncompleted visits. Visit IDs [${ineligibles.map(v => v.id).join(', ')}] are not marked COMPLETED.`
+      });
+    }
+
+    // 4. Resolve or create Counselor Bill
+    let targetBill = null;
+    if (billId) {
+      targetBill = await prisma.bill.findUnique({
+        where: { id: billId },
+        include: { serviceLines: true }
+      });
+    }
+
+    if (!targetBill) {
+      targetBill = await prisma.bill.findFirst({
+        where: {
+          caseId: targetCase.id,
+          providerId: 'prov-counselor'
+        },
+        include: { serviceLines: true }
+      });
+    }
+
+    if (!targetBill) {
+      const cleanCaseSuffix = (targetCase.id || 'case').replace(/[^a-zA-Z0-9]/g, '').slice(-6);
+      const generatedBillId = `bill-counselor-${targetCase.id}`;
+      const randNum = Math.floor(1000 + Math.random() * 9000);
+
+      targetBill = await prisma.bill.create({
+        data: {
+          id: generatedBillId,
+          caseId: targetCase.id,
+          providerId: 'prov-counselor',
+          invoiceNumber: `INV-COUNSELOR-${cleanCaseSuffix}-${randNum}`,
+          statementNumber: `${randNum}-C`,
+          statementDate: new Date().toISOString().split('T')[0],
+          billToName: targetCase.attorneyName || targetCase.lawFirm || 'OJ LAW FIRM & ASSOCIATES',
+          billToAddress: targetCase.attorneyAddress || targetCase.lawFirmAddress || '11711 Bedford St. Suite 01, Houston TX 77031',
+          status: 'ISSUED',
+          totals: { totalCharges: 0, totalPayments: 0, totalAdjustments: 0, balanceDue: 0 },
+          aging: { current: 0, past30: 0, past60: 0, past90: 0 }
+        },
+        include: { serviceLines: true }
+      });
+    }
+
+    // 5. Synchronize Service Lines for this bill
+    const existingLines = targetBill.serviceLines || [];
+    const selectedSet = new Set(selectedVisitIds);
+
+    for (const line of existingLines) {
+      const matchedVisit = visits.find(v => {
+        const cleanVid = v.id.replace(/[^a-zA-Z0-9]/g, '').slice(-14);
+        return line.id.includes(cleanVid) || (line.dos === v.date && line.cptCode === v.cptCode);
+      });
+      if (!matchedVisit || !selectedSet.has(matchedVisit.id)) {
+        await prisma.serviceLine.delete({ where: { id: line.id } });
+      }
+    }
+
+    // Add service lines for selected visits
+    const refreshedLines = await prisma.serviceLine.findMany({ where: { billId: targetBill.id } });
+
+    for (const v of visits) {
+      const cleanVid = v.id.replace(/[^a-zA-Z0-9]/g, '').slice(-14);
+      const alreadyHasLine = refreshedLines.some(l => l.id.includes(cleanVid) || (l.dos === v.date && l.cptCode === v.cptCode));
+      if (!alreadyHasLine) {
+        const cpt = v.cptCode || '90834';
+        let charge = 180.00;
+        let desc = 'Psychotherapy, 45 minutes';
+        if (cpt === '90791') { charge = 350.00; desc = 'Psychiatric Diagnostic Evaluation (Intake)'; }
+        else if (cpt === '90837') { charge = 240.00; desc = 'Psychotherapy with patient, 60 minutes'; }
+        else if (cpt === '90832') { charge = 120.00; desc = 'Psychotherapy with patient, 30 minutes'; }
+        else if (cpt === '90847') { charge = 220.00; desc = 'Family Psychotherapy with patient (50 minutes)'; }
+        else if (cpt === '90853') { charge = 95.00; desc = 'Group Psychotherapy'; }
+
+        const shortLineId = `sc-${cleanVid}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        await prisma.serviceLine.create({
+          data: {
+            id: shortLineId,
+            billId: targetBill.id,
+            dos: v.date || new Date().toISOString().split('T')[0],
+            dateOfService: v.date || new Date().toISOString().split('T')[0],
+            placeOfService: '11',
+            cptCode: cpt,
+            description: desc,
+            units: 1,
+            charge: charge,
+            insurancePayment: 0,
+            patientPayment: 0,
+            otherPayment: 0,
+            adjustments: 0,
+            balance: charge,
+            lineBalance: charge
+          }
+        });
+      }
+    }
+
+    // 6. Recalculate bill totals and aging
+    await recalculateBillTotals(targetBill.id);
+
+    // 7. Return refreshed bill
+    const updatedBill = await prisma.bill.findUnique({
+      where: { id: targetBill.id },
+      include: {
+        serviceLines: true,
+        provider: true,
+        case: { include: { patient: true } }
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully synchronized ${selectedVisitIds.length} counseling visit(s) into billing statement.`,
+      bill: formatBill(updatedBill),
+      billedVisitCount: selectedVisitIds.length
+    });
+  } catch (error) {
+    console.error('Error syncing counseling bill:', error);
+    return res.status(500).json({ error: 'Failed to sync counseling bill.' });
+  }
+};
+
+/**
+ * DELETE /api/billing/counseling-visits/service-line/:lineId
+ * Remove a specific counseling visit service line from a draft bill and recalculate
+ */
+export const removeCounselingVisitFromBill = async (req, res) => {
+  const { lineId } = req.params;
+
+  try {
+    const line = await prisma.serviceLine.findUnique({
+      where: { id: lineId }
+    });
+
+    if (!line) {
+      return res.status(404).json({ error: 'Service line not found' });
+    }
+
+    const billId = line.billId;
+    await prisma.serviceLine.delete({ where: { id: lineId } });
+    await recalculateBillTotals(billId);
+
+    const updatedBill = await prisma.bill.findUnique({
+      where: { id: billId },
+      include: {
+        serviceLines: true,
+        provider: true,
+        case: { include: { patient: true } }
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Service line removed and bill recalculated.',
+      bill: formatBill(updatedBill)
+    });
+  } catch (error) {
+    console.error('Error removing counseling service line:', error);
+    return res.status(500).json({ error: 'Failed to remove counseling service line.' });
+  }
+};
+
+/**
  * DELETE /api/billing/bills/:id
  * Delete a bill statement and its service lines cleanly
  */
@@ -1542,5 +2039,55 @@ export const deleteBill = async (req, res) => {
   } catch (error) {
     console.error('Error deleting bill:', error);
     return res.status(500).json({ error: 'Failed to delete bill.' });
+  }
+};
+
+/**
+ * DELETE /v1/billing/bills/:id/service-lines/:lineId
+ * Delete an itemized CPT service line from an editable/draft bill and recalculate totals
+ */
+export const deleteServiceLine = async (req, res) => {
+  const { id, lineId } = req.params;
+
+  try {
+    const bill = await prisma.bill.findUnique({
+      where: { id }
+    });
+
+    if (!bill) {
+      return res.status(404).json({ error: 'Bill statement not found' });
+    }
+
+    if (bill.status === 'FINALIZED' || bill.status === 'FINALISED' || bill.status === 'FINALISED_DEMO') {
+      return res.status(400).json({ error: 'Cannot remove CPT lines from a finalized/locked bill.' });
+    }
+
+    const line = await prisma.serviceLine.findUnique({
+      where: { id: lineId }
+    });
+
+    if (!line || line.billId !== id) {
+      return res.status(404).json({ error: 'Service line not found on this bill statement' });
+    }
+
+    await prisma.serviceLine.delete({
+      where: { id: lineId }
+    });
+
+    await recalculateBillTotals(id);
+
+    const updatedBill = await prisma.bill.findUnique({
+      where: { id },
+      include: {
+        serviceLines: true,
+        provider: true,
+        case: { include: { patient: true } }
+      }
+    });
+
+    return res.status(200).json(formatBill(updatedBill));
+  } catch (error) {
+    console.error('Error deleting service line:', error);
+    return res.status(500).json({ error: 'Failed to delete service line' });
   }
 };

@@ -171,6 +171,54 @@ export const createNote = async (req, res) => {
 
     const noteType = data.type || data.noteType || 'JOSMIC_PAIN';
 
+    // 4. Resolve and validate appointment/visit association
+    const appointmentId = data.appointmentId || data.content?.appointmentId;
+    if (appointmentId) {
+      const targetApt = await prisma.appointment.findUnique({
+        where: { id: appointmentId }
+      });
+      if (targetApt && targetApt.patientId !== patientId) {
+        return res.status(400).json({ error: 'Validation Error: This appointment visit does not belong to the selected patient.' });
+      }
+
+      // Check if an existing note is already linked to this visit
+      const existingVisitNote = await prisma.clinicalNote.findFirst({
+        where: {
+          patientId,
+          OR: [
+            { id: data.id || undefined },
+            { title: { contains: appointmentId } }
+          ]
+        }
+      });
+
+      if (existingVisitNote) {
+        if (existingVisitNote.status === 'SIGNED_LOCKED' && !data.isAddendum) {
+          return res.status(403).json({ error: 'This visit clinical note is already electronically signed and locked. It cannot be overwritten.' });
+        }
+        // Update draft note for this visit
+        const updatedVisitNote = await prisma.clinicalNote.update({
+          where: { id: existingVisitNote.id },
+          data: {
+            title: data.title || existingVisitNote.title,
+            date: data.date || existingVisitNote.date,
+            status: data.status || existingVisitNote.status,
+            author: data.author || existingVisitNote.author,
+            soapSubjective: data.soapSubjective || (data.content?.presentingConcerns || ''),
+            soapObjective: data.soapObjective || (data.content?.clinicalObservations || ''),
+            soapAssessment: data.soapAssessment || (data.content?.assessment || ''),
+            soapPlan: data.soapPlan || (data.content?.followUpPlan || ''),
+            content: { ...(typeof existingVisitNote.content === 'object' ? existingVisitNote.content : {}), ...data.content, appointmentId }
+          },
+          include: {
+            patient: { select: { firstName: true, lastName: true, selectedInjuryAreas: true } },
+            provider: { select: { name: true } }
+          }
+        });
+        return res.status(200).json(formatNote(updatedVisitNote));
+      }
+    }
+
     // If saving an AI_DOCTOR_NOTE, update existing note for this case if present
     if (noteType === 'AI_DOCTOR_NOTE' && validCaseId) {
       const existingDocNote = await prisma.clinicalNote.findFirst({
@@ -367,7 +415,8 @@ const compileClinicalDocumentation = (inputData) => {
  * Generate AI SOAP suggested text drafts (Supports Live Gemini API, Groq, or Smart Clinical Template Engine)
  */
 export const generateAiDraft = async (req, res) => {
-  const { promptType, inputData } = req.body;
+  const promptType = req.body.promptType || req.body.noteType || req.body.type;
+  const inputData = req.body.inputData || req.body;
 
   if (!promptType) {
     return res.status(400).json({ error: 'promptType is required.' });
@@ -474,6 +523,52 @@ Generate a valid JSON object ONLY (no markdown, no backticks) with these exact k
   "procedureDescription": "Detailed operative technique describing aseptic prep with ChloraPrep, palpation of taut bands, aspiration negative for blood/fluid, injection with local twitch response, and patient tolerance."
 }
 Patient: ${patientName}, Context: ${complaints}, Locations: ${locations}, Diagnoses: ${diag}. Pure JSON only.`;
+  } else if (promptType === 'COUNSELING_INDIVIDUAL_NOTE' || promptType === 'COUNSELOR_PROGRESS_NOTE') {
+    const sessionDate = inputData?.sessionDate || inputData?.date || new Date().toISOString().split('T')[0];
+    const cptCode = inputData?.cptCode || '90834';
+    const duration = inputData?.duration || '45 min';
+    const presentingConcerns = inputData?.presentingConcerns || inputData?.chiefComplaint || '';
+    const currentSymptoms = inputData?.currentSymptoms || inputData?.symptoms || '';
+    const patientReported = inputData?.patientReported || inputData?.subjective || '';
+    const clinicalObservations = typeof inputData?.clinicalObservations === 'object'
+      ? JSON.stringify(inputData.clinicalObservations)
+      : (inputData?.clinicalObservations || inputData?.mse || '');
+    const treatmentProvided = inputData?.treatmentProvided || inputData?.interventions || '';
+    const progress = inputData?.progress || inputData?.progressSinceLastVisit || '';
+    const patientResponse = inputData?.patientResponse || '';
+    const followUpPlan = inputData?.followUpPlan || inputData?.plan || '';
+    const additionalNotes = inputData?.additionalNotes || '';
+
+    aiPrompt = `You are a licensed clinical psychotherapist / mental health counselor documenting an individual psychotherapy session note.
+Patient: ${patientName}
+Session Date: ${sessionDate}
+CPT Code: ${cptCode} (${duration})
+Primary Diagnoses: ${diag || 'Accident-related trauma / Post-Traumatic Stress and Adjustment Disorder'}
+
+Clinical Information Provided by Clinician:
+- Presenting Concerns: ${presentingConcerns || 'Not specified'}
+- Current Symptoms: ${currentSymptoms || 'Not specified'}
+- Patient-Reported Information (Subjective): ${patientReported || 'Not specified'}
+- Clinical Observations & Mental Status: ${clinicalObservations || 'Alert, oriented, cooperative'}
+- Treatment / Therapeutic Interventions Provided: ${treatmentProvided || 'Cognitive Behavioral Therapy (CBT), psychoeducation, coping skills'}
+- Progress Since Previous Visit: ${progress || 'Stable / Ongoing therapeutic engagement'}
+- Patient Response to Treatment: ${patientResponse || 'Receptive to therapeutic interventions'}
+- Follow-up Plan & Next Steps: ${followUpPlan || 'Continue scheduled psychotherapy sessions'}
+- Additional Notes: ${additionalNotes || 'None'}
+
+CRITICAL CLINICAL DOCUMENTATION RULES:
+1. Generate an individualized, highly professional clinical progress note using ONLY the clinical facts provided above.
+2. DO NOT invent unstated symptoms, medical facts, diagnoses, medications, or patient quotes.
+3. If an area was marked as not specified or left blank, indicate that it was not reported or omit it cleanly.
+4. Output a valid JSON object ONLY (no markdown backticks, no markdown formatting) with these exact keys:
+{
+  "subjective": "Thorough professional subjective narrative incorporating presenting concerns, symptoms, and patient-reported state.",
+  "mentalStatusExam": "Structured clinical observations of appearance, orientation, mood/affect, speech, thought process, and safety/risk assessment.",
+  "interventions": "Detailed therapeutic interventions provided during this session (e.g., CBT techniques, cognitive reframing, somatic regulation).",
+  "progressAndResponse": "Clinical assessment of progress since last encounter and patient's response and engagement during this session.",
+  "planAndFollowUp": "Clear actionable plan, follow-up schedule, homework/skills practice, and next clinical steps.",
+  "fullNoteText": "The complete formatted clinical progress note combining all sections in standardized professional medical format."
+}`;
   } else if (promptType === 'COUNSELING_SESSION_NOTES') {
     aiPrompt = `You are a licensed clinical psychotherapist / mental health counselor documenting individual psychotherapy progress notes (CPT 90837, 60 mins) for a patient recovering from a motor vehicle accident.
 Generate a valid JSON object ONLY (no markdown, no backticks) with these exact 6 keys:
@@ -693,6 +788,37 @@ Provide clean, concise medical prose with standard medical terminology and ICD-1
       procedureDescription: 'The patient was placed in a comfortable prone/seated position. The target trigger points in the indicated musculature were palpated and marked. The overlying skin was prepped in standard sterile fashion using ChloraPrep. A 25-gauge, 1.5-inch needle was inserted directly into the taut bands of the trigger points. Negative aspiration for blood or bodily fluids was confirmed in multiple planes. A total of 4 mL of 1% preservative-free Lidocaine was injected into the identified trigger points. Local twitch responses were elicited followed by notable relaxation of the muscle band. The needle was withdrawn, and direct hemostatic pressure was applied. Sterile bandages were placed over the injection sites. The patient tolerated the procedure well without immediate adverse events or complications.'
     };
     draftText = JSON.stringify(jsonResponse);
+  } else if (promptType === 'COUNSELING_INDIVIDUAL_NOTE' || promptType === 'COUNSELOR_PROGRESS_NOTE') {
+    const sessionDate = inputData?.sessionDate || inputData?.date || new Date().toISOString().split('T')[0];
+    const cptCode = inputData?.cptCode || '90834';
+    const duration = inputData?.duration || '45 min';
+    const presentingConcerns = inputData?.presentingConcerns || inputData?.chiefComplaint || 'Patient presents for scheduled behavioral health counseling and psychotherapeutic care.';
+    const currentSymptoms = inputData?.currentSymptoms || inputData?.symptoms || 'Vehicular travel anxiety, hyperarousal, and emotional distress following collision.';
+    const patientReported = inputData?.patientReported || inputData?.subjective || 'Patient reports ongoing symptoms and discusses recent challenges with daily transit.';
+    const clinicalObservations = typeof inputData?.clinicalObservations === 'object' 
+      ? Object.entries(inputData.clinicalObservations).map(([k, v]) => `${k}: ${v}`).join('; ')
+      : (inputData?.clinicalObservations || inputData?.mse || 'Patient is alert and oriented x4. Affect is constricted but congruent. Speech is normal in rate and rhythm. Denies suicidal/homicidal ideation.');
+    const treatmentProvided = inputData?.treatmentProvided || inputData?.interventions || 'Cognitive Behavioral Therapy (CBT) cognitive reframing, psychoeducation on post-trauma stress triggers, and diaphragmatic breathing regulation.';
+    const progress = inputData?.progress || inputData?.progressSinceLastVisit || 'Patient demonstrates active participation and comprehension of coping strategies.';
+    const patientResponse = inputData?.patientResponse || 'Patient was receptive to therapeutic interventions and engaged constructively in session.';
+    const followUpPlan = inputData?.followUpPlan || inputData?.plan || 'Continue individual psychotherapy sessions 1x weekly. Practice grounding and breathing exercises daily.';
+    const additionalNotes = inputData?.additionalNotes || '';
+
+    const subjective = `PATIENT REPORT & SUBJECTIVE:\nPatient ${patientName} attended individual psychotherapy (${cptCode}, ${duration}) on ${sessionDate}.\nPresenting Concerns: ${presentingConcerns}\nCurrent Symptoms: ${currentSymptoms}\nPatient Statement: ${patientReported}`;
+    const mentalStatusExam = `CLINICAL OBSERVATIONS & MENTAL STATUS:\n${clinicalObservations}\nRisk Assessment: Patient denies suicidal/homicidal ideation, intent, or plan. Cognition is grossly intact.`;
+    const interventions = `THERAPEUTIC INTERVENTIONS PROVIDED:\n${treatmentProvided}`;
+    const progressAndResponse = `PROGRESS & TREATMENT RESPONSE:\nProgress: ${progress}\nPatient Response: ${patientResponse}`;
+    const planAndFollowUp = `TREATMENT PLAN & NEXT STEPS:\n${followUpPlan}${additionalNotes ? `\nAdditional Clinical Notes: ${additionalNotes}` : ''}`;
+    const fullNoteText = `BEHAVIORAL HEALTH & PSYCHOTHERAPY PROGRESS NOTE\nPatient: ${patientName} | Date: ${sessionDate} | CPT: ${cptCode} (${duration})\n\n1. SUBJECTIVE:\n${presentingConcerns}\nSymptoms: ${currentSymptoms}\nPatient Statement: ${patientReported}\n\n2. OBJECTIVE / MENTAL STATUS:\n${clinicalObservations}\n\n3. INTERVENTIONS PROVIDED:\n${treatmentProvided}\n\n4. PROGRESS & PATIENT RESPONSE:\nProgress: ${progress}\nPatient Response: ${patientResponse}\n\n5. PLAN & NEXT STEPS:\n${followUpPlan}${additionalNotes ? `\nNotes: ${additionalNotes}` : ''}`;
+
+    draftText = JSON.stringify({
+      subjective,
+      mentalStatusExam,
+      interventions,
+      progressAndResponse,
+      planAndFollowUp,
+      fullNoteText
+    });
   } else if (promptType === 'COUNSELING_SESSION_NOTES') {
     const accType = inputData?.accidentType || 'motor vehicle collision';
     const jsonResponse = {

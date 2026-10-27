@@ -3,10 +3,18 @@ import {
   getFourBillsByCase, getBillById, createBill, addServiceLine, 
   postPayment, postAdjustment, finaliseBill, getAgingSummary,
   getOverviewStats, getPaymentsList, getPracticeReports, updateBill, deleteBill,
-  getAllCmsClaims
+  getAllCmsClaims,
+  getCounselingVisitsForPatient, recordCounselingVisit, syncCounselingBill, removeCounselingVisitFromBill,
+  deleteServiceLine
 } from '../controllers/billingController.js';
 
 const router = express.Router();
+
+// Counseling Visit Billing Endpoints (Manual visit tracking & billing)
+router.get('/counseling-visits/:patientId', getCounselingVisitsForPatient);
+router.post('/counseling-visits', recordCounselingVisit);
+router.post('/counseling-visits/sync-bill', syncCounselingBill);
+router.delete('/counseling-visits/service-line/:lineId', removeCounselingVisitFromBill);
 
 // Register paths
 router.get('/cms-claims', getAllCmsClaims);
@@ -22,6 +30,7 @@ router.post('/bills', createBill);
 router.put('/bills/:id', updateBill);
 router.delete('/bills/:id', deleteBill);
 router.post('/bills/:id/service-lines', addServiceLine); // Matches addServiceLine form submit
+router.delete('/bills/:id/service-lines/:lineId', deleteServiceLine); // Delete individual CPT line
 router.post('/bills/:id/payments', postPayment);
 router.post('/bills/:id/adjustments', postAdjustment);
 router.post('/bills/:id/finalise', finaliseBill);

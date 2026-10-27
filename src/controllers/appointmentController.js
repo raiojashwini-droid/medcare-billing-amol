@@ -105,9 +105,10 @@ export const createAppointment = async (req, res) => {
     return res.status(400).json({ error: 'date and startTime are required.' });
   }
 
-  // Check clinic closure & past dates
+  // Check clinic closure & past dates (allow recording completed/historical visits)
+  const isHistorical = data.status === 'COMPLETED' || data.allowPastDate || data.isCompletedVisit || data.isHistorical;
   const closedCheck = isClinicClosed(data.date);
-  if (closedCheck.isPast) {
+  if (closedCheck.isPast && !isHistorical) {
     return res.status(400).json({ error: 'Appointments cannot be scheduled for past dates.' });
   }
   if (closedCheck.isClosed && !data.holidayOverride) {
