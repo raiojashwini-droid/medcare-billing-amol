@@ -211,8 +211,8 @@ async function main() {
     },
     {
       id: 'prov-davs',
-      name: "FM Dav’s Anatomy",
-      businessName: "FM Dav’s Anatomy Shockwave Therapy LLC",
+      name: "Shockwave",
+      businessName: "Shockwave Therapy LLC",
       serviceCategory: 'Shockwave Therapy (ESWT)',
       status: 'ACTIVE',
       address: {
@@ -240,12 +240,12 @@ async function main() {
         npi: '1932847561'
       },
       serviceFacility: {
-        name: 'FM Dav’s Anatomy',
+        name: 'Shockwave',
         address: '9900 Westpark Dr, Houston, TX 77063',
         npi: '1932847561'
       },
       billingProvider: {
-        name: 'FM Dav’s Anatomy',
+        name: 'Shockwave',
         address: '9900 Westpark Dr, Houston, TX 77063',
         phone: '346-338-7020'
       },
@@ -269,7 +269,7 @@ async function main() {
           duration: '30 min',
           billingDescription: 'Shockwave / ESWT Therapy',
           placeOfService: '10',
-          clinicalTemplate: 'FM Dav’s ESWT Therapy Record',
+          clinicalTemplate: 'Shockwave ESWT Therapy Record',
           configurationStatus: 'COMPLETE'
         }
       ]

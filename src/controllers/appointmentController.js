@@ -185,6 +185,17 @@ export const createAppointment = async (req, res) => {
       }
     }
 
+    // Auto-link to patient's active case if caseId was omitted during scheduling
+    if (!targetCaseId && targetPatientId) {
+      const defaultCase = await prisma.case.findFirst({
+        where: { patientId: targetPatientId },
+        orderBy: { createdAt: 'desc' }
+      });
+      if (defaultCase) {
+        targetCaseId = defaultCase.id;
+      }
+    }
+
     // 3. Resolve Provider ID
     let targetProviderId = data.providerId || 'prov-josmic';
     let provName = 'Dr. Segun Adeoye (FM Health and Wellness)';

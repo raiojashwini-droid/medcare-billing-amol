@@ -638,6 +638,9 @@ export const createBill = async (req, res) => {
         billToName: data.billToName || 'OJ LAW FIRM & ASSOCIATES',
         billToAddress: data.billToAddress || '11711 Bedford St. Suite 01, Houston TX 77031',
         status: 'ISSUED',
+        cmsSignatures: data.cmsSignatures 
+          ? (typeof data.cmsSignatures === 'string' ? data.cmsSignatures : JSON.stringify(data.cmsSignatures))
+          : null,
         totals: { totalCharges: 0, totalPayments: 0, totalAdjustments: 0, balanceDue: 0 },
         aging: { current: 0, past30: 0, past60: 0, past90: 0 }
       },
@@ -1545,13 +1548,15 @@ export const updateBill = async (req, res) => {
 
     await recalculateBillTotals(id);
 
-    if (status || req.body.cmsSignatures) {
+    if (status || req.body.cmsSignatures !== undefined) {
       const dataToUpdate = {};
       if (status) dataToUpdate.status = status;
-      if (req.body.cmsSignatures) {
-        dataToUpdate.cmsSignatures = typeof req.body.cmsSignatures === 'string' 
-          ? req.body.cmsSignatures 
-          : JSON.stringify(req.body.cmsSignatures);
+      if (req.body.cmsSignatures !== undefined) {
+        dataToUpdate.cmsSignatures = req.body.cmsSignatures === null 
+          ? null 
+          : (typeof req.body.cmsSignatures === 'string' 
+              ? req.body.cmsSignatures 
+              : JSON.stringify(req.body.cmsSignatures));
       }
 
       await prisma.bill.update({
@@ -1611,6 +1616,13 @@ export const getCounselingVisitsForPatient = async (req, res) => {
     }
 
     const resolvedPatientId = patient.id;
+    const patientIds = [resolvedPatientId];
+    if (patient.patientId && patient.patientId !== resolvedPatientId) {
+      patientIds.push(patient.patientId);
+    }
+    const patientCaseIds = (patient.cases || []).map(c => c.id).filter(Boolean);
+    const patientCaseNumbers = (patient.cases || []).map(c => c.caseId).filter(Boolean);
+
     const targetCase = caseId 
       ? patient.cases.find(c => c.id === caseId || c.caseId === caseId) || patient.cases[0]
       : patient.cases[0];
@@ -1618,12 +1630,20 @@ export const getCounselingVisitsForPatient = async (req, res) => {
     // 2. Find counseling appointments/visits for this patient
     const visits = await prisma.appointment.findMany({
       where: {
-        patientId: resolvedPatientId,
         OR: [
-          { providerId: 'prov-counselor' },
-          { appointmentType: { contains: 'Psychotherapy' } },
-          { appointmentType: { contains: 'Counseling' } },
-          { cptCode: { in: ['90791', '90834', '90837', '90832', '90847', '90853'] } }
+          { patientId: { in: patientIds } },
+          ...(patientCaseIds.length > 0 ? [{ caseId: { in: patientCaseIds } }] : []),
+          ...(patientCaseNumbers.length > 0 ? [{ caseId: { in: patientCaseNumbers } }] : [])
+        ],
+        AND: [
+          {
+            OR: [
+              { providerId: 'prov-counselor' },
+              { appointmentType: { contains: 'Psychotherapy' } },
+              { appointmentType: { contains: 'Counseling' } },
+              { cptCode: { in: ['90791', '90834', '90837', '90832', '90847', '90853'] } }
+            ]
+          }
         ]
       },
       orderBy: { date: 'asc' }
@@ -1632,10 +1652,18 @@ export const getCounselingVisitsForPatient = async (req, res) => {
     // 3. Find clinical notes for this patient and prov-counselor
     const notes = await prisma.clinicalNote.findMany({
       where: {
-        patientId: resolvedPatientId,
         OR: [
-          { providerId: 'prov-counselor' },
-          { noteType: { contains: 'COUNSEL' } }
+          { patientId: { in: patientIds } },
+          ...(patientCaseIds.length > 0 ? [{ caseId: { in: patientCaseIds } }] : []),
+          ...(patientCaseNumbers.length > 0 ? [{ caseId: { in: patientCaseNumbers } }] : [])
+        ],
+        AND: [
+          {
+            OR: [
+              { providerId: 'prov-counselor' },
+              { noteType: { contains: 'COUNSEL' } }
+            ]
+          }
         ]
       }
     });
@@ -1692,8 +1720,9 @@ export const getCounselingVisitsForPatient = async (req, res) => {
       const matchingNote = notes.find(n => {
         const parsedContent = typeof n.content === 'string' ? (() => { try { return JSON.parse(n.content); } catch(e){ return {}; } })() : (n.content || {});
         return parsedContent.appointmentId === v.id || 
-               (n.date === v.date && parsedContent.cptCode === v.cptCode) ||
-               (n.title && n.title.includes(v.id));
+               n.appointmentId === v.id ||
+               (n.title && n.title.includes(v.id)) ||
+               (n.date === v.date && (parsedContent.cptCode === v.cptCode || n.title?.includes(v.cptCode)));
       });
 
       let fee = 180.00;
@@ -1772,7 +1801,6 @@ export const recordCounselingVisit = async (req, res) => {
       targetCaseId = patient.cases[0].id;
     }
 
-    const generatedId = `apt-coun-${Date.now()}`;
     const cpt = data.cptCode || '90834';
     let aptType = 'Individual Psychotherapy (45 Min)';
     if (cpt === '90791') aptType = 'Psychiatric Diagnostic Evaluation (Intake)';
@@ -1780,6 +1808,25 @@ export const recordCounselingVisit = async (req, res) => {
     else if (cpt === '90832') aptType = 'Individual Psychotherapy (30 Min)';
     else if (cpt === '90847') aptType = 'Family Psychotherapy (50 Min)';
 
+    // Prevent duplicate visit for same patient, date and cpt
+    const existingVisit = await prisma.appointment.findFirst({
+      where: {
+        patientId: patient.id,
+        providerId: 'prov-counselor',
+        date: data.date,
+        cptCode: cpt
+      }
+    });
+
+    if (existingVisit) {
+      return res.status(200).json({
+        success: true,
+        message: 'Counseling visit already recorded for this date and service code.',
+        visit: existingVisit
+      });
+    }
+
+    const generatedId = `apt-coun-${Date.now()}`;
     const newVisit = await prisma.appointment.create({
       data: {
         id: generatedId,
@@ -1842,10 +1889,21 @@ export const syncCounselingBill = async (req, res) => {
     }
 
     // 2. Fetch the visits to be billed
+    const patientIds = [patient.id];
+    if (patient.patientId && patient.patientId !== patient.id) {
+      patientIds.push(patient.patientId);
+    }
+    const patientCaseIds = (patient.cases || []).map(c => c.id).filter(Boolean);
+    const patientCaseNumbers = (patient.cases || []).map(c => c.caseId).filter(Boolean);
+
     const visits = await prisma.appointment.findMany({
       where: {
         id: { in: selectedVisitIds },
-        patientId: patient.id
+        OR: [
+          { patientId: { in: patientIds } },
+          ...(patientCaseIds.length > 0 ? [{ caseId: { in: patientCaseIds } }] : []),
+          ...(patientCaseNumbers.length > 0 ? [{ caseId: { in: patientCaseNumbers } }] : [])
+        ]
       }
     });
 

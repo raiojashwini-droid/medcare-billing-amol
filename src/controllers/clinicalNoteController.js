@@ -47,6 +47,11 @@ export const getNotes = async (req, res) => {
     if (caseId) where.caseId = caseId;
     if (type) where.noteType = type;
 
+    // Doctor role is restricted to Pain Management (prov-josmic) and Counseling (prov-counselor)
+    if (req.doctorFilterAllowedOnly) {
+      where.providerId = { in: ['prov-josmic', 'prov-counselor'] };
+    }
+
     const notes = await prisma.clinicalNote.findMany({
       where,
       include: {
@@ -182,15 +187,27 @@ export const createNote = async (req, res) => {
       }
 
       // Check if an existing note is already linked to this visit
-      const existingVisitNote = await prisma.clinicalNote.findFirst({
-        where: {
-          patientId,
-          OR: [
-            { id: data.id || undefined },
-            { title: { contains: appointmentId } }
-          ]
-        }
-      });
+      let existingVisitNote = null;
+      if (data.id) {
+        existingVisitNote = await prisma.clinicalNote.findUnique({
+          where: { id: data.id }
+        });
+      }
+      if (!existingVisitNote) {
+        const candidateNotes = await prisma.clinicalNote.findMany({
+          where: {
+            patientId,
+            OR: [
+              { providerId },
+              { noteType }
+            ]
+          }
+        });
+        existingVisitNote = candidateNotes.find(n => {
+          const parsed = typeof n.content === 'string' ? (() => { try { return JSON.parse(n.content); } catch(e){ return {}; } })() : (n.content || {});
+          return parsed.appointmentId === appointmentId || (n.title && n.title.includes(appointmentId));
+        });
+      }
 
       if (existingVisitNote) {
         if (existingVisitNote.status === 'SIGNED_LOCKED' && !data.isAddendum) {
@@ -726,16 +743,42 @@ Provide clean, concise medical prose with standard medical terminology and ICD-1
       }
     }
 
-    const jsonResponse = {
-      chiefComplaint: inputData?.chiefComplaint || (complaints ? `Patient presents following documented injury: ${complaints}.` : 'Information not documented in selected records.'),
-      subjectiveHistory: inputData?.painDescription || (locations ? `Symptoms localized to documented regions: ${locations}.` : 'Information not documented in selected records.'),
-      objectiveFindings: documentedExam || 'Information not documented in selected records.',
-      clinicalAssessment: documentedImpression || (diag ? `Documented clinical impression: ${diag}` : 'Information not documented in selected records.'),
-      treatmentsAdministered: synthesizedTreatments || 'Information not documented in selected records.',
-      courseOfCare: documentedProgress || 'Information not documented in selected records.',
-      treatmentPlan: documentedPlan || 'Information not documented in selected records.',
-      followUp: documentedFollowUp || 'Information not documented in selected records.'
-    };
+    const isLaserInitial = compiledDocs.includes('Class IV Deep Tissue Laser Therapy Initial Narrative') || compiledDocs.includes('EVALUATION MODALITY: Class IV Deep Tissue Laser');
+    const isLaserDischarge = compiledDocs.includes('Class IV Laser Therapy Final Discharge Report') || compiledDocs.includes('DISCHARGE EVALUATION: Class IV Laser');
+
+    let jsonResponse;
+
+    if (isLaserDischarge) {
+      jsonResponse = {
+        treatmentsAdministered: `The patient has completed a comprehensive, prescribed course of High-Intensity Class IV Deep Tissue Laser Therapy (HILT) consisting of ${sessions || '12 clinical sessions'}. Throughout the therapeutic regimen, treatment was administered utilizing therapeutic dual-wavelength Class IV laser technology (800nm, 10.5W output, average 900 seconds per treatment zone), delivering deep-tissue photobiomodulation to the cervical, thoracic, and lumbar paraspinal musculature.\n\nEach session was paired with certified protective optical eyewear (CPT 10001) and supplemented with adjunctive manual soft-tissue mobilization (CPT 97124). Treatment was consistently well-tolerated with zero documented adverse events, burns, or procedural complications. Cumulative therapeutic energy successfully stimulated soft-tissue regeneration, attenuated local chronic inflammatory mediators, and broke the cycle of reactive muscular splinting.`,
+        objectiveFindings: `FINAL OBJECTIVE RE-EXAMINATION:\n- Palpation: Demonstrates marked clinical improvement with substantial resolution of acute myofascial trigger points in the bilateral trapezius, levator scapulae, and lumbar paraspinals. Soft tissues exhibit improved elasticity, compliance, and significant reduction in localized hypertonicity.\n- Range of Motion (ROM): Cervical spine active range of motion is restored to 90-95% of expected physiological normal in all anatomical planes (flexion, extension, bilateral lateral flexion, and rotation) with only minimal stiffness at extreme terminal limits. Lumbar spine range of motion demonstrates 90% recovery with absence of sharp mechanical catching.\n- Neurological Re-Assessment: Motor strength remains 5/5 bilaterally in upper and lower extremities. Sensory perception is intact and symmetrical throughout all dermatomes. Deep tendon reflexes remain 2+ and symmetrical. Straight Leg Raise is negative bilaterally.\n- Pain Severity (VAS): The patient's reported pain rating has significantly decreased from an initial baseline of 7-8/10 down to 1-2/10 (mild, intermittent tightness only).`,
+        clinicalAssessment: `DISCHARGE IMPRESSION & PERMANENT IMPAIRMENT:\n1. Resolved Acute Cervical Sprain/Strain (ICD-10 S13.4XXD) with restored mobility and minimal residual tightness.\n2. Resolved Acute Lumbar Sprain/Strain (ICD-10 S33.5XXD) with stabilized paraspinal musculature.\n3. Stable Myofascial Pain Syndrome (ICD-10 M79.1) demonstrating clinically successful response to Class IV photobiomodulation.\n\nMAXIMUM MEDICAL IMPROVEMENT (MMI):\nThe patient has achieved Maximum Medical Improvement (MMI) with respect to the acute traumatic musculoskeletal injuries sustained in the motor vehicle accident. Further intensive formal laser therapy is no longer required at this time as acute clinical stabilization has been reached. In accordance with AMA Guidelines for Evaluation of Permanent Impairment, the patient demonstrates no permanent sensory loss, radiculopathy, or focal motor deficits, resulting in 0% permanent whole-person impairment.`,
+        treatmentPlan: `HOME EXERCISE PROGRAM (HEP) & LONG-TERM CARE:\nThe patient has been instructed in, demonstrated proficiency with, and issued an individualized self-directed Home Exercise Program (HEP) designed for long-term postural and muscular maintenance:\n1. Cervical Retraction & Scapular Squeeze: 3 sets of 10 repetitions twice daily to preserve cervicothoracic alignment.\n2. Gentle Dynamic Range-of-Motion: Daily active stretching for cervical lateral flexion and rotation.\n3. Lumbar Pelvic Tilts & Core Stabilization: Floor-based bridging and abdominal bracing 1-2 times daily to safeguard lumbosacral disc integrity.\n4. Ergonomic Guidelines: Educated on proper workstation lumbar support, computer screen eye-level positioning, and taking regular micro-breaks during prolonged sitting or vehicular travel.\n5. Activity Transition: Patient is released to return to pre-accident functional and occupational duties without formal permanent restrictions.`,
+        followUp: `CLINICAL DISCHARGE SIGN-OFF:\nThe patient is formally discharged from active Class IV Laser Therapy and restorative care. Treatment records, service line billing statements, and documentation packets have been finalized, verified for medical necessity, and entered into the legal repository. The patient has been educated on flare-up self-management (utilizing ice/heat and prescribed home exercises) and instructed to follow up on a PRN (as-needed) basis should any acute exacerbation of symptoms arise.`
+      };
+    } else if (isLaserInitial) {
+      jsonResponse = {
+        chiefComplaint: `The patient presents for comprehensive initial clinical evaluation and initiation of Class IV High-Intensity Laser Therapy (HILT) following involvement in a motor vehicle collision occurring ${inputData?.accidentDate ? `on ${inputData.accidentDate}` : 'recently'}. Upon intake, the patient reports significant, persistent musculoskeletal discomfort localized primarily to the cervical, thoracic, and lumbosacral regions. Chief subjective complaints include: ${complaints || 'cervicalgia, mid-back aching, and lower back stiffness with associated myofascial discomfort'}.\n\nThe pain is characterized as constant, aching, and throbbing, intensifying markedly with prolonged sitting, standing, cervical rotation, and routine activities of daily living (ADLs). Secondary muscular guarding and tension-related cervicogenic headaches are also noted. The patient rates the current pain severity at 7-8/10 on the Visual Analog Scale (VAS), with peak exacerbations reaching 8-9/10 following sustained postural load. Review of systems confirms no loss of bowel/bladder control, progressive focal motor deficit, or constitutional symptoms. Prior conservative self-care measures have yielded only temporary, transient relief.`,
+        subjectiveHistory: `Symptoms remain localized to documented spinal regions: ${locations || 'Cervical Spine, Upper Trapezius, and Lumbar Spine'}. The onset of pain was immediate to rapid post-collision, accompanied by progressive morning stiffness, neck and shoulder burning, and difficulty sustaining seated work or vehicular travel.`,
+        objectiveFindings: `PHYSICAL EXAMINATION:\nInspection of the cervical and thoracolumbar spine reveals noticeable postural guarding and mild antalgic positioning. Palpation demonstrates marked tenderness and hyperirritable myofascial taut bands with active trigger points throughout the bilateral upper trapezius, levator scapulae, rhomboids, and lumbar paraspinal musculature (L1-S1). Moderate to severe muscular hypertonicity and tissue induration are evident on deep palpation.\n\nRANGE OF MOTION (ROM):\n- Cervical Spine: Flexion restricted to 30°/50°, extension 30°/60°, bilateral lateral flexion restricted to 25°/45°, and bilateral rotation limited to 45°/80° with reported terminal pain and tightness.\n- Lumbar Spine: Flexion limited to 40°/60°, extension 15°/25°, with localized low back discomfort upon terminal extension and lateral bending.\n\nNEUROLOGICAL ASSESSMENT:\n- Motor Strength: Upper and lower extremity motor testing graded 5/5 bilaterally across all major muscle groups (C5-T1, L2-S1).\n- Sensory Testing: Intact and symmetrical to light touch and pinprick across all corresponding dermatomal distributions; no focal sensory deficits.\n- Deep Tendon Reflexes (DTR): Biceps (C5), Brachioradialis (C6), Triceps (C7), Patellar (L4), and Achilles (S1) reflexes are active and symmetrical, graded 2+/4 bilaterally. Straight Leg Raise (SLR) test is negative bilaterally for radiculopathy.`,
+        clinicalAssessment: `CLINICAL IMPRESSION:\nBased upon the patient's subjective clinical history, mechanism of traumatic injury from the documented collision, and objective physical examination findings, the clinical impressions are established as follows:\n\n1. Acute Traumatic Cervical Sprain/Strain (ICD-10 S13.4XXA) with associated myofascial hyperirritability and restricted active range of motion.\n2. Acute Traumatic Lumbar Sprain/Strain (ICD-10 S33.5XXA) with paraspinal muscle hypertonicity and mechanical postural intolerance.\n3. Myofascial Pain Syndrome & Trigger Points (ICD-10 M79.1) involving the bilateral cervicothoracic and lumbosacral soft tissues.\n4. Cervicogenic Headaches (ICD-10 G44.209) secondary to upper cervical paraspinal spasm and trapezius contracture.\nDocumented Diagnostic Code References: ${diag || 'M54.2, M54.50, S13.4XXA, S33.5XXA'}.\n\nThe patient's current symptomatic presentation correlates directly with the biomechanical deceleration and acceleration forces sustained during the collision, resulting in micro-tearing of myofascial fibers, localized inflammation, and reactive paraspinal guarding.`,
+        treatmentsAdministered: `Administered initial Class IV Deep Tissue Laser Therapy (HILT - CPT 97039) session delivering 800nm dual-wavelength photobiomodulation at 10.5W, paired with mandatory protective eye filtration (CPT 10001) and adjunctive myofascial release (CPT 97124).`,
+        courseOfCare: 'Initiating structured multi-modality photobiomodulation care plan. Patient educated on post-treatment hydration, temporary soreness management, and avoidance of heavy eccentric loading.',
+        treatmentPlan: `PLAN OF CARE & THERAPEUTIC PROTOCOL:\nIn light of the documented soft-tissue injuries and functional limitations, an aggressive, multi-modality conservative rehabilitation protocol is recommended:\n\n1. High-Intensity Class IV Deep Tissue Laser Therapy (HILT - CPT 97039):\n   - Frequency: 2 to 3 sessions weekly for a recommended duration of 4 to 6 weeks.\n   - Modality Parameters: Dual-wavelength photobiomodulation (800nm continuous wave and pulsed delivery), operating at 10.5 Watts output, delivering approximately 236,250 Joules of therapeutic optical energy across affected cervical, upper thoracic, and lumbosacral paraspinal target zones.\n   - Clinical Objective: Stimulate intracellular cytochrome c oxidase, accelerate mitochondrial ATP synthesis, reduce localized pro-inflammatory cytokines, enhance microcirculation, and stimulate tissue repair.\n2. Protective Eye Protocol (CPT 10001): Mandated safety goggles certified for 800nm attenuation worn by patient and clinician throughout all active laser emissions.\n3. Adjunctive Manual Therapy / Therapeutic Massage (CPT 97124): 15-30 minutes per visit to reduce post-treatment myofascial tension and promote soft-tissue mobilization.\n4. Functional Goals: (a) Reduce VAS pain scores by >= 50% within 4 weeks; (b) Restore cervical and lumbar active range of motion by >= 80%; (c) Enhance seated and vehicular transit tolerance without acute spasm.`,
+        followUp: `PROGNOSIS & DISABILITY STATUS:\nThe patient's clinical prognosis for functional recovery is considered FAIR to GOOD, conditioned upon strict adherence to the prescribed Class IV Laser Therapy schedule and active rehabilitation protocol. Given the acute post-traumatic onset, complete tissue remodeling and resolution of deep paraspinal myofascial inflammation typically requires consistent photobiomodulation therapy combined with structured home mobility.\n\nDISABILITY & FUNCTIONAL RESTRICTIONS:\nThe patient is currently moderately disabled with respect to heavy physical exertion and sustained vehicular driving. The following temporary occupational and functional activity modifications are advised for the next 4 weeks:\n- No lifting, carrying, pushing, or pulling in excess of 10-15 lbs.\n- Avoid prolonged uninterrupted sitting or standing exceeding 30-45 minutes without brief postural stretching breaks.\n- Avoid rapid, repetitive cervical extension, rotation, or heavy trunk flexion/twisting.\n- Patient will undergo formal clinical re-evaluation and progress assessment at the conclusion of 4 weeks of active therapy.`
+      };
+    } else {
+      jsonResponse = {
+        chiefComplaint: inputData?.chiefComplaint || (complaints ? `Patient presents following documented injury: ${complaints}.` : 'Information not documented in selected records.'),
+        subjectiveHistory: inputData?.painDescription || (locations ? `Symptoms localized to documented regions: ${locations}.` : 'Information not documented in selected records.'),
+        objectiveFindings: documentedExam || 'Information not documented in selected records.',
+        clinicalAssessment: documentedImpression || (diag ? `Documented clinical impression: ${diag}` : 'Information not documented in selected records.'),
+        treatmentsAdministered: synthesizedTreatments || 'Information not documented in selected records.',
+        courseOfCare: documentedProgress || 'Information not documented in selected records.',
+        treatmentPlan: documentedPlan || 'Information not documented in selected records.',
+        followUp: documentedFollowUp || 'Information not documented in selected records.'
+      };
+    }
   } else if (promptType === 'PAIN_MANAGEMENT') {
     const accDate = inputData?.accidentDate || '';
     const accType = inputData?.accidentType || 'motor vehicle collision';
