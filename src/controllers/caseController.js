@@ -421,6 +421,7 @@ export const updateCase = async (req, res) => {
         ...(data.lawFirm !== undefined && { lawFirm: data.lawFirm }),
         ...(data.attorneyPhone !== undefined && { attorneyPhone: data.attorneyPhone }),
         ...(data.attorneyEmail !== undefined && { attorneyEmail: data.attorneyEmail }),
+        ...(data.attorneyAddress !== undefined && { attorneyAddress: data.attorneyAddress }),
         ...(data.lawFirmAddress !== undefined && { lawFirmAddress: data.lawFirmAddress }),
         ...(data.litigationStatus !== undefined && { litigationStatus: data.litigationStatus }),
         ...(data.insuranceCompany !== undefined && { insuranceCompany: data.insuranceCompany }),

@@ -248,26 +248,8 @@ const getDefaultServiceLinesForProvider = (providerId, accidentDateStr) => {
 
   switch (providerId) {
     case 'prov-josmic':
-      return [
-        {
-          cptCode: '99204',
-          description: 'Comprehensive Initial Pain Management Evaluation & Medical Decision Making',
-          modifier1: '25',
-          modifier2: '',
-          units: 1,
-          charge: 1214.00,
-          dos
-        },
-        {
-          cptCode: '97039',
-          description: 'High-Frequency Radiofrequency & Deep Tissue Joint Modality (TECAR)',
-          modifier1: '59',
-          modifier2: '',
-          units: 1,
-          charge: 2000.00,
-          dos
-        }
-      ];
+      // MD Consultation visits must reflect actual recorded clinical appointments, never auto-assigned dummy templates
+      return [];
 
     case 'prov-davs':
       return [
@@ -471,6 +453,131 @@ export const getFourBillsByCase = async (req, res) => {
           }
         }
       });
+    }
+
+    // For prov-josmic (MD Consultation): Reconcile with actual appointments and purge auto-generated dummy template lines (e.g. 97039 Radiofrequency)
+    const josmicBillIndex = bills.findIndex(b => b.providerId === 'prov-josmic');
+    if (josmicBillIndex !== -1) {
+      const jb = bills[josmicBillIndex];
+      const hasDummyRadiofrequency = (jb.serviceLines || []).some(l => 
+        l.cptCode === '97039' && (l.description?.includes('Radiofrequency') || l.description?.includes('TECAR'))
+      );
+
+      const mdAppts = await prisma.appointment.findMany({
+        where: {
+          patientId: targetCase.patientId,
+          status: { notIn: ['CANCELLED', 'NO_SHOW'] },
+          OR: [
+            { providerId: 'prov-josmic' },
+            { providerId: 'usr-sa' },
+            { appointmentType: { contains: 'Pain' } },
+            { appointmentType: { contains: 'Consult' } },
+            { reasonForVisit: { contains: 'pain' } }
+          ]
+        },
+        orderBy: { date: 'asc' }
+      });
+
+      if (hasDummyRadiofrequency || (mdAppts.length > 0 && (!jb.serviceLines || jb.serviceLines.length === 0))) {
+        const realLines = [];
+        mdAppts.forEach(a => {
+          let parsedLines = null;
+          if (a.reasonForVisit && a.reasonForVisit.includes('<!-- APPT_METADATA:')) {
+            try {
+              const m = a.reasonForVisit.match(/<!--\s*APPT_METADATA:\s*(\{.*?\})\s*-->/);
+              if (m && m[1]) {
+                const parsed = JSON.parse(m[1]);
+                if (parsed.serviceLines && parsed.serviceLines.length > 0) {
+                  parsedLines = parsed.serviceLines;
+                }
+              }
+            } catch (e) {}
+          }
+
+          if (parsedLines) {
+            parsedLines.forEach(pl => {
+              realLines.push({
+                dos: a.date || targetCase.accidentDate || targetCase.initialDate || new Date().toISOString().split('T')[0],
+                cptCode: pl.cptCode || '99204',
+                description: pl.description || 'Comprehensive Initial Pain Management Evaluation & Medical Decision Making',
+                modifier1: pl.modifier1 || '25',
+                modifier2: pl.modifier2 || '',
+                units: Number(pl.units) || 1,
+                charge: Number(pl.charge !== undefined ? pl.charge : 1214.00)
+              });
+            });
+          } else {
+            const codes = (a.cptCode || '99204').split(',').map(c => c.trim()).filter(Boolean);
+            codes.forEach(c => {
+              realLines.push({
+                dos: a.date || targetCase.accidentDate || targetCase.initialDate || new Date().toISOString().split('T')[0],
+                cptCode: c,
+                description: c === '99204' ? 'Comprehensive Initial Pain Management Evaluation & Medical Decision Making' : `MD Consultation - ${c}`,
+                modifier1: c === '99204' ? '25' : '',
+                modifier2: '',
+                units: 1,
+                charge: c === '99204' ? 1214.00 : 150.00
+              });
+            });
+          }
+        });
+
+        if (realLines.length > 0) {
+          try {
+            await prisma.serviceLine.deleteMany({
+              where: { billId: jb.id }
+            });
+
+            for (let i = 0; i < realLines.length; i++) {
+              const rl = realLines[i];
+              await prisma.serviceLine.create({
+                data: {
+                  id: `srv-${jb.id}-${i + 1}`,
+                  billId: jb.id,
+                  dos: rl.dos,
+                  dateOfService: rl.dos,
+                  placeOfService: '11',
+                  cptCode: rl.cptCode,
+                  description: rl.description,
+                  modifier1: rl.modifier1 || null,
+                  modifier2: rl.modifier2 || null,
+                  units: rl.units,
+                  charge: rl.charge,
+                  insurancePayment: 0,
+                  patientPayment: 0,
+                  otherPayment: 0,
+                  adjustments: 0,
+                  balance: rl.charge * rl.units,
+                  lineBalance: rl.charge * rl.units
+                }
+              });
+            }
+
+            const totalCharges = realLines.reduce((acc, l) => acc + (l.charge * l.units), 0);
+            await prisma.bill.update({
+              where: { id: jb.id },
+              data: {
+                totals: { totalCharges, totalPayments: 0, totalAdjustments: 0, balanceDue: totalCharges },
+                aging: { current: totalCharges, past30: 0, past60: 0, past90: 0 }
+              }
+            });
+
+            const reloadedBill = await prisma.bill.findUnique({
+              where: { id: jb.id },
+              include: {
+                serviceLines: true,
+                provider: true,
+                case: { include: { patient: true } }
+              }
+            });
+            if (reloadedBill) {
+              bills[josmicBillIndex] = reloadedBill;
+            }
+          } catch (syncErr) {
+            console.warn('Error syncing MD consultation bill lines in DB:', syncErr.message);
+          }
+        }
+      }
     }
 
     return res.status(200).json({
