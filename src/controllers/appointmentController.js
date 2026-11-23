@@ -7,6 +7,28 @@ import { isUSFederalHoliday, isClinicClosed } from '../constants/usHolidays.js';
  */
 const formatAppointment = (a) => {
   if (!a) return null;
+
+  // Extract embedded service lines and billing metadata from reasonForVisit if present
+  let cleanReason = a.reasonForVisit || '';
+  let serviceLines = null;
+  let totalEstimatedCharge = null;
+
+  if (a.reasonForVisit && a.reasonForVisit.includes('<!-- APPT_METADATA:')) {
+    const match = a.reasonForVisit.match(/<!-- APPT_METADATA:([\s\S]*?)-->/);
+    if (match) {
+      try {
+        const meta = JSON.parse(match[1]);
+        if (meta.serviceLines && Array.isArray(meta.serviceLines)) {
+          serviceLines = meta.serviceLines;
+        }
+        if (meta.totalEstimatedCharge !== undefined) {
+          totalEstimatedCharge = meta.totalEstimatedCharge;
+        }
+      } catch (e) {}
+    }
+    cleanReason = a.reasonForVisit.replace(/<!-- APPT_METADATA:[\s\S]*?-->/, '').trim();
+  }
+
   return {
     id: a.id,
     patientId: a.patientId,
@@ -27,8 +49,10 @@ const formatAppointment = (a) => {
     bookingChannel: a.bookingChannel,
     reminderStatus: a.reminderStatus,
     reminderPreference: a.reminderPreference,
-    reasonForVisit: a.reasonForVisit,
+    reasonForVisit: cleanReason,
     cptCode: a.cptCode,
+    serviceLines,
+    totalEstimatedCharge,
     rescheduleReason: a.rescheduleReason || '',
     cancelReason: a.cancelReason || '',
     createdAt: a.createdAt
@@ -153,7 +177,7 @@ export const createAppointment = async (req, res) => {
             phone: data.patientPhone || '',
             email: data.patientEmail || `${firstName.toLowerCase()}.${Date.now()}@example.com`,
             dob: data.patientDob || '1990-01-01',
-            gender: 'Unspecified',
+            sex: data.sex || 'Unspecified',
             status: 'ACTIVE'
           }
         });
@@ -234,6 +258,20 @@ export const createAppointment = async (req, res) => {
       appointmentDateVal = null;
     }
 
+    let finalReason = data.reasonForVisit || 'Comprehensive Evaluation';
+    if (data.serviceLines && Array.isArray(data.serviceLines) && !finalReason.includes('<!-- APPT_METADATA:')) {
+      const meta = JSON.stringify({
+        serviceLines: data.serviceLines,
+        totalEstimatedCharge: data.totalEstimatedCharge || null
+      });
+      finalReason = `${finalReason}\n<!-- APPT_METADATA:${meta} -->`;
+    }
+
+    let finalCptCode = data.cptCode;
+    if (!finalCptCode && data.serviceLines && Array.isArray(data.serviceLines) && data.serviceLines.length > 0) {
+      finalCptCode = data.serviceLines.map(l => l.cptCode).filter(Boolean).join(',');
+    }
+
     const newApt = await prisma.appointment.create({
       data: {
         id: generatedId,
@@ -248,9 +286,9 @@ export const createAppointment = async (req, res) => {
         bookingChannel: data.bookingChannel || 'Clinic Staff Portal',
         reminderStatus: 'Sent - SMS Queued',
         reminderPreference: data.reminderPreference || 'SMS',
-        reasonForVisit: data.reasonForVisit || 'Comprehensive Evaluation',
+        reasonForVisit: finalReason,
         appointmentType: data.appointmentType || 'Consultation',
-        cptCode: data.cptCode || '99204',
+        cptCode: finalCptCode || '99204',
         location: data.location || 'Suite 774'
       },
       include: {
@@ -643,7 +681,7 @@ export const updateAppointment = async (req, res) => {
   try {
     const existingApt = await prisma.appointment.findUnique({
       where: { id },
-      select: { patientId: true }
+      select: { patientId: true, reasonForVisit: true }
     });
 
     const updatePayload = {};
@@ -657,10 +695,37 @@ export const updateAppointment = async (req, res) => {
     if (updateData.startTime) updatePayload.startTime = updateData.startTime;
     if (updateData.endTime) updatePayload.endTime = updateData.endTime;
     if (updateData.providerId) updatePayload.providerId = updateData.providerId;
-    if (updateData.reasonForVisit !== undefined) updatePayload.reasonForVisit = updateData.reasonForVisit;
+    if (updateData.reasonForVisit !== undefined) {
+      let finalUpdateReason = updateData.reasonForVisit;
+      if (updateData.serviceLines && Array.isArray(updateData.serviceLines) && !finalUpdateReason.includes('<!-- APPT_METADATA:')) {
+        const meta = JSON.stringify({
+          serviceLines: updateData.serviceLines,
+          totalEstimatedCharge: updateData.totalEstimatedCharge || null
+        });
+        finalUpdateReason = `${finalUpdateReason}\n<!-- APPT_METADATA:${meta} -->`;
+      } else if (!finalUpdateReason.includes('<!-- APPT_METADATA:') && existingApt?.reasonForVisit && existingApt.reasonForVisit.includes('<!-- APPT_METADATA:')) {
+        // Retain existing billing serviceLines metadata if updating reasonForVisit without serviceLines
+        const match = existingApt.reasonForVisit.match(/<!-- APPT_METADATA:([\s\S]*?)-->/);
+        if (match) {
+          finalUpdateReason = `${finalUpdateReason}\n<!-- APPT_METADATA:${match[1].trim()} -->`;
+        }
+      }
+      updatePayload.reasonForVisit = finalUpdateReason;
+    } else if (updateData.serviceLines && Array.isArray(updateData.serviceLines)) {
+      const cleanReason = (existingApt?.reasonForVisit || '').replace(/<!-- APPT_METADATA:[\s\S]*?-->/, '').trim();
+      const meta = JSON.stringify({
+        serviceLines: updateData.serviceLines,
+        totalEstimatedCharge: updateData.totalEstimatedCharge || null
+      });
+      updatePayload.reasonForVisit = cleanReason ? `${cleanReason}\n<!-- APPT_METADATA:${meta} -->` : `<!-- APPT_METADATA:${meta} -->`;
+    }
     if (updateData.location) updatePayload.location = updateData.location;
     if (updateData.appointmentType) updatePayload.appointmentType = updateData.appointmentType;
-    if (updateData.cptCode) updatePayload.cptCode = String(updateData.cptCode);
+    if (updateData.cptCode) {
+      updatePayload.cptCode = String(updateData.cptCode);
+    } else if (updateData.serviceLines && Array.isArray(updateData.serviceLines) && updateData.serviceLines.length > 0) {
+      updatePayload.cptCode = updateData.serviceLines.map(l => l.cptCode).filter(Boolean).join(',');
+    }
     if (updateData.status) updatePayload.status = updateData.status;
 
     if (existingApt?.patientId && (updateData.patientName || updateData.patientPhone || updateData.patientDob)) {
