@@ -5,10 +5,17 @@ import {
   getOverviewStats, getPaymentsList, getPracticeReports, updateBill, deleteBill,
   getAllCmsClaims,
   getCounselingVisitsForPatient, recordCounselingVisit, syncCounselingBill, removeCounselingVisitFromBill,
-  deleteServiceLine
+  deleteServiceLine,
+  getPerformedServices, recordPerformedService, updatePerformedService, deletePerformedService
 } from '../controllers/billingController.js';
 
 const router = express.Router();
+
+// Performed Patient Services Endpoints (Services Page & Clinical Recording)
+router.get('/performed-services', getPerformedServices);
+router.post('/performed-services', recordPerformedService);
+router.put('/performed-services/:id', updatePerformedService);
+router.delete('/performed-services/:id', deletePerformedService);
 
 // Counseling Visit Billing Endpoints (Manual visit tracking & billing)
 router.get('/counseling-visits/:patientId', getCounselingVisitsForPatient);

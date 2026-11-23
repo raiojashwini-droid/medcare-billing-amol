@@ -2149,3 +2149,261 @@ export const deleteServiceLine = async (req, res) => {
     return res.status(500).json({ error: 'Failed to delete service line' });
   }
 };
+
+/**
+ * GET /api/billing/performed-services
+ * Retrieve recorded patient services from the database with Patient, Provider, CPT, and DOS
+ */
+export const getPerformedServices = async (req, res) => {
+  try {
+    const { patientId, providerId, status } = req.query;
+
+    const where = {};
+    if (patientId) where.patientId = patientId;
+    if (providerId) where.providerId = providerId;
+    if (status) where.status = status;
+
+    const appointments = await prisma.appointment.findMany({
+      where,
+      include: {
+        patient: { select: { id: true, patientId: true, firstName: true, lastName: true, phone: true } },
+        provider: { select: { id: true, name: true, specialty: true } },
+        case: { select: { id: true, caseId: true } }
+      },
+      orderBy: { date: 'desc' }
+    });
+
+    // Also get all CPT codes for rate fallback
+    const allCpts = await prisma.cptCode.findMany().catch(() => []);
+    const cptFeeMap = {};
+    allCpts.forEach(c => {
+      const cleanFee = parseFloat(String(c.fee || '').replace(/[^0-9.]/g, '')) || 0;
+      cptFeeMap[c.code] = { fee: cleanFee, description: c.description };
+    });
+
+    const feeSchedule = {
+      '90791': 350.00,
+      '90834': 180.00,
+      '90837': 240.00,
+      '90832': 120.00,
+      '90847': 220.00,
+      '90853': 95.00,
+      '99204': 1214.00,
+      '97039': 2000.00,
+      '0101T': 1000.00,
+      '20552': 450.00,
+      '97124': 150.00
+    };
+
+    const performed = appointments.map(apt => {
+      const cpt = apt.cptCode || '90834';
+      const catalog = cptFeeMap[cpt];
+      const rate = catalog?.fee || feeSchedule[cpt] || 180.00;
+      const units = 1;
+      const totalCharge = units * rate;
+      const patientName = apt.patient ? `${apt.patient.firstName || ''} ${apt.patient.lastName || ''}`.trim() : 'Patient';
+
+      return {
+        id: apt.id,
+        appointmentId: apt.id,
+        patientId: apt.patientId,
+        patientName,
+        caseId: apt.caseId || apt.case?.caseId || '',
+        providerId: apt.providerId,
+        providerName: apt.provider?.name || apt.providerId,
+        dos: apt.date || '',
+        dateOfService: apt.date || '',
+        cptCode: cpt,
+        description: apt.appointmentType || catalog?.description || apt.reasonForVisit || 'Patient Care Service',
+        units,
+        rate,
+        totalCharge,
+        status: apt.status || 'COMPLETED',
+        location: apt.location || 'Main Clinic',
+        startTime: apt.startTime || '',
+        endTime: apt.endTime || '',
+        createdAt: apt.createdAt
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: performed.length,
+      services: performed
+    });
+  } catch (error) {
+    console.error('Error fetching performed services:', error);
+    return res.status(500).json({ error: 'Failed to fetch performed services.' });
+  }
+};
+
+/**
+ * POST /api/billing/performed-services
+ * Record a new performed patient service
+ */
+export const recordPerformedService = async (req, res) => {
+  const data = req.body;
+  const { patientId, providerId, appointmentId, caseId, dos, cptCode, description, units, rate, totalCharge, status } = data;
+
+  if (!patientId || !providerId || !dos || !cptCode) {
+    return res.status(400).json({ error: 'patientId, providerId, dos, and cptCode are required.' });
+  }
+
+  try {
+    const patient = await prisma.patient.findFirst({
+      where: { OR: [{ id: patientId }, { patientId }] },
+      include: { cases: true }
+    });
+
+    if (!patient) {
+      return res.status(404).json({ error: 'Patient not found' });
+    }
+
+    let targetCaseId = caseId;
+    if (!targetCaseId && patient.cases?.length > 0) {
+      targetCaseId = patient.cases[0].id;
+    }
+
+    const serviceStatus = status || 'COMPLETED';
+    let appointment;
+
+    if (appointmentId) {
+      // Update existing appointment
+      appointment = await prisma.appointment.update({
+        where: { id: appointmentId },
+        data: {
+          date: dos,
+          cptCode,
+          status: serviceStatus,
+          appointmentType: description || undefined,
+          caseId: targetCaseId || undefined
+        },
+        include: { patient: true, provider: true }
+      });
+    } else {
+      // Create new appointment for this service
+      const generatedAptId = `apt-svc-${Date.now()}`;
+      appointment = await prisma.appointment.create({
+        data: {
+          id: generatedAptId,
+          patientId: patient.id,
+          caseId: targetCaseId,
+          providerId,
+          date: dos,
+          startTime: '10:00 AM',
+          endTime: '10:45 AM',
+          status: serviceStatus,
+          appointmentType: description || 'Clinical Service',
+          cptCode,
+          bookingChannel: 'Services Management Entry',
+          reasonForVisit: description || 'Patient performed service',
+          location: 'Suite 104'
+        },
+        include: { patient: true, provider: true }
+      });
+    }
+
+    const calculatedRate = parseFloat(rate) || 180.00;
+    const calculatedUnits = parseInt(units) || 1;
+    const finalCharge = parseFloat(totalCharge) || (calculatedRate * calculatedUnits);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Service recorded successfully in database.',
+      service: {
+        id: appointment.id,
+        appointmentId: appointment.id,
+        patientId: patient.id,
+        patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+        caseId: targetCaseId,
+        providerId,
+        providerName: appointment.provider?.name || providerId,
+        dos,
+        cptCode,
+        description: description || appointment.appointmentType,
+        units: calculatedUnits,
+        rate: calculatedRate,
+        totalCharge: finalCharge,
+        status: serviceStatus
+      }
+    });
+  } catch (error) {
+    console.error('Error recording performed service:', error);
+    return res.status(500).json({ error: 'Failed to record service in database.' });
+  }
+};
+
+/**
+ * PUT /api/billing/performed-services/:id
+ */
+export const updatePerformedService = async (req, res) => {
+  const { id } = req.params;
+  const data = req.body;
+
+  try {
+    const existing = await prisma.appointment.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Service record not found' });
+    }
+
+    const updated = await prisma.appointment.update({
+      where: { id },
+      data: {
+        date: data.dos || data.date || existing.date,
+        cptCode: data.cptCode || existing.cptCode,
+        status: data.status || existing.status,
+        appointmentType: data.description || existing.appointmentType,
+        providerId: data.providerId || existing.providerId,
+        caseId: data.caseId || existing.caseId
+      },
+      include: { patient: true, provider: true }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Service record updated successfully.',
+      service: {
+        id: updated.id,
+        appointmentId: updated.id,
+        patientId: updated.patientId,
+        patientName: updated.patient ? `${updated.patient.firstName} ${updated.patient.lastName}`.trim() : '',
+        providerId: updated.providerId,
+        providerName: updated.provider?.name || updated.providerId,
+        dos: updated.date,
+        cptCode: updated.cptCode,
+        description: updated.appointmentType,
+        units: data.units || 1,
+        rate: data.rate || 180,
+        totalCharge: data.totalCharge || (data.rate || 180),
+        status: updated.status
+      }
+    });
+  } catch (error) {
+    console.error('Error updating performed service:', error);
+    return res.status(500).json({ error: 'Failed to update service record.' });
+  }
+};
+
+/**
+ * DELETE /api/billing/performed-services/:id
+ */
+export const deletePerformedService = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const existing = await prisma.appointment.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Service record not found' });
+    }
+
+    await prisma.appointment.delete({ where: { id } });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Service record removed successfully.'
+    });
+  } catch (error) {
+    console.error('Error deleting performed service:', error);
+    return res.status(500).json({ error: 'Failed to delete service record.' });
+  }
+};
