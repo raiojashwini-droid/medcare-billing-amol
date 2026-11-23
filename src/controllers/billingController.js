@@ -2167,7 +2167,7 @@ export const getPerformedServices = async (req, res) => {
       where,
       include: {
         patient: { select: { id: true, patientId: true, firstName: true, lastName: true, phone: true } },
-        provider: { select: { id: true, name: true, specialty: true } },
+        provider: { select: { id: true, name: true, serviceCategory: true } },
         case: { select: { id: true, caseId: true } }
       },
       orderBy: { date: 'desc' }
