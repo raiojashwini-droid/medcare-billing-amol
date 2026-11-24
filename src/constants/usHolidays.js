@@ -11,7 +11,7 @@ export const US_FEDERAL_HOLIDAYS = [
   { id: 'hol-columbus', name: "Columbus Day / Indigenous Peoples' Day", month: 10, nth: 2, dayOfWeek: 1, type: 'FLOATING' }, // 2nd Mon in Oct
   { id: 'hol-veterans', name: 'Veterans Day', month: 11, day: 11, type: 'FIXED' },
   { id: 'hol-thanksgiving', name: 'Thanksgiving Day', month: 11, nth: 4, dayOfWeek: 4, type: 'FLOATING' }, // 4th Thurs in Nov
-  { id: 'hol-christmas', name: 'Christmas Day', month: 12, day: 25, type: 'FIXED' },
+  { id: 'hol-christmas',  name: 'Christmas Day', month: 12, day: 25, type: 'FIXED' },
 ];
 
 const formatDateStr = (dateObj) => {
