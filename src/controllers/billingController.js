@@ -373,7 +373,32 @@ export const getFourBillsByCase = async (req, res) => {
     });
 
     const existingProvIds = new Set(bills.map(b => b.providerId));
-    const providerIds = ['prov-counselor', 'prov-josmic', 'prov-davs', 'prov-anik', 'prov-tpi', 'prov-tecar'];
+    
+    // Extract assigned provider IDs selected by user during Patient/Case creation (Step 3 / Step 4)
+    let targetProviderIds = [];
+    if (targetCase.assignedProviderIds) {
+      try {
+        targetProviderIds = typeof targetCase.assignedProviderIds === 'string'
+          ? JSON.parse(targetCase.assignedProviderIds)
+          : targetCase.assignedProviderIds;
+      } catch (e) {
+        targetProviderIds = [];
+      }
+    }
+    if ((!Array.isArray(targetProviderIds) || targetProviderIds.length === 0) && targetCase.patient?.assignedProviderIds) {
+      try {
+        targetProviderIds = typeof targetCase.patient.assignedProviderIds === 'string'
+          ? JSON.parse(targetCase.patient.assignedProviderIds)
+          : targetCase.patient.assignedProviderIds;
+      } catch (e) {
+        targetProviderIds = [];
+      }
+    }
+
+    // Only auto-initialize bills for providers EXPLICITLY assigned by the user
+    const providerIds = (Array.isArray(targetProviderIds) && targetProviderIds.length > 0)
+      ? targetProviderIds
+      : ['prov-josmic']; // Sensible minimal fallback if no providers configured
     let createdAny = false;
 
     for (const provId of providerIds) {
@@ -580,9 +605,14 @@ export const getFourBillsByCase = async (req, res) => {
       }
     }
 
+    // Filter returned bills strictly to those assigned to this case/patient if assignedProviderIds is set
+    const filteredBills = (Array.isArray(targetProviderIds) && targetProviderIds.length > 0)
+      ? bills.filter(b => targetProviderIds.includes(b.providerId))
+      : bills;
+
     return res.status(200).json({
       caseId: targetCase.caseId || targetCase.id,
-      allBills: bills.map(formatBill)
+      allBills: filteredBills.map(formatBill)
     });
   } catch (error) {
     console.error('Error fetching case bills:', error);
@@ -607,9 +637,30 @@ export const getAllCmsClaims = async (req, res) => {
       }
     });
 
+    // Filter bills: Only include bills for clinics explicitly assigned to the case/patient
+    const activeBills = bills.filter(b => {
+      const caseAssigned = b.case?.assignedProviderIds;
+      const patientAssigned = b.case?.patient?.assignedProviderIds;
+      let assigned = [];
+      if (caseAssigned) {
+        try {
+          assigned = typeof caseAssigned === 'string' ? JSON.parse(caseAssigned) : caseAssigned;
+        } catch (e) {}
+      }
+      if ((!Array.isArray(assigned) || assigned.length === 0) && patientAssigned) {
+        try {
+          assigned = typeof patientAssigned === 'string' ? JSON.parse(patientAssigned) : patientAssigned;
+        } catch (e) {}
+      }
+      if (Array.isArray(assigned) && assigned.length > 0) {
+        return assigned.includes(b.providerId);
+      }
+      return true; // Keep if no specific assignment rule exists
+    });
+
     return res.status(200).json({
       success: true,
-      bills: bills.map(formatBill)
+      bills: activeBills.map(formatBill)
     });
   } catch (error) {
     console.error('Error fetching all CMS claims:', error);

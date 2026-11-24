@@ -189,3 +189,36 @@ export const updateAttorney = async (req, res) => {
     return res.status(500).json({ error: 'Failed to update attorney record.' });
   }
 };
+
+/**
+ * DELETE /v1/attorneys/:id
+ * Remove an attorney from the database
+ */
+export const deleteAttorney = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if exists
+    const existing = await prisma.attorney.findUnique({
+      where: { id }
+    });
+    
+    if (!existing) {
+      return res.status(404).json({ error: 'Attorney record not found in database.' });
+    }
+
+    await prisma.attorney.delete({
+      where: { id }
+    });
+
+    console.log(`⚖️ [ATTORNEY DELETED] Successfully removed ${existing.name} (${existing.firm}) - ID: ${id}`);
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Attorney deleted successfully',
+      deletedId: id 
+    });
+  } catch (error) {
+    console.error('Error deleting attorney:', error);
+    return res.status(500).json({ error: 'Failed to delete attorney record.' });
+  }
+};
