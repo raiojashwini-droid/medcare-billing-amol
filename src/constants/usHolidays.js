@@ -14,7 +14,7 @@ export const US_FEDERAL_HOLIDAYS = [
   { id: 'hol-christmas',  name: 'Christmas Day', month: 12, day: 25, type: 'FIXED' },
 ];
 
-const  formatDateStr = (dateObj) => {
+const formatDateStr = (dateObj) => {
   const y = dateObj.getFullYear();
   const m = String(dateObj.getMonth() + 1).padStart(2, '0');
   const d = String(dateObj.getDate()).padStart(2, '0');
