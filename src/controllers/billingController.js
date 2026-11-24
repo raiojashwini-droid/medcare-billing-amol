@@ -203,13 +203,14 @@ const recalculateBillTotals = async (billId) => {
   let totalAdjustments = 0;
 
   for (const l of lines) {
+    const units = Number(l.units) || 1;
     const charge = Number(l.charge) || 0;
     const insPay = Number(l.insurancePayment) || 0;
     const patPay = Number(l.patientPayment) || 0;
     const othPay = Number(l.otherPayment) || 0;
     const adj = Number(l.adjustments) || 0;
 
-    totalCharges += charge;
+    totalCharges += (charge * units);
     totalPayments += (insPay + patPay + othPay);
     totalAdjustments += adj;
   }
@@ -242,93 +243,10 @@ const recalculateBillTotals = async (billId) => {
 
 /**
  * Default procedure template generator per provider
+ * Auto-creation disabled: Provider bills must reflect actual recorded clinical appointments or explicit user creation.
  */
 const getDefaultServiceLinesForProvider = (providerId, accidentDateStr) => {
-  const dos = accidentDateStr || new Date().toISOString().split('T')[0];
-
-  switch (providerId) {
-    case 'prov-josmic':
-      // MD Consultation visits must reflect actual recorded clinical appointments, never auto-assigned dummy templates
-      return [];
-
-    case 'prov-davs':
-      return [
-        {
-          cptCode: '0101T',
-          description: 'Extracorporeal Shockwave Therapy (ESWT) Musculoskeletal Tissue Regeneration (8 Sessions)',
-          modifier1: 'GP',
-          modifier2: '',
-          units: 8,
-          charge: 1000.00,
-          dos
-        }
-      ];
-
-    case 'prov-anik':
-      return [
-        {
-          cptCode: '97039',
-          description: 'Class IV High-Intensity Laser Therapy (HILT) Biostimulation (6 Sessions)',
-          modifier1: 'GP',
-          modifier2: 'RT',
-          units: 6,
-          charge: 2000.00,
-          dos
-        },
-        {
-          cptCode: '97124',
-          description: 'Therapeutic Deep Tissue Laser Mobilization & Spinal Decompression Supplies',
-          modifier1: '59',
-          modifier2: '',
-          units: 1,
-          charge: 2606.00,
-          dos
-        }
-      ];
-
-    case 'prov-counselor':
-      // Counseling visits must reflect actual recorded clinical sessions, never auto-assigned
-      return [];
-
-    case 'prov-tpi':
-      return [
-        {
-          cptCode: '20552',
-          description: 'Trigger Point Injection - 1 or 2 Muscle Groups (Spinal & Cervical Paravertebral)',
-          modifier1: '59',
-          modifier2: '',
-          units: 1,
-          charge: 450.00,
-          dos
-        }
-      ];
-
-    case 'prov-tecar':
-      return [
-        {
-          cptCode: '97039',
-          description: 'Targeted Radiofrequency TECAR Therapy Session & Deep Thermal Bio-Modulation',
-          modifier1: 'GP',
-          modifier2: '',
-          units: 1,
-          charge: 1500.00,
-          dos
-        }
-      ];
-
-    default:
-      return [
-        {
-          cptCode: '99204',
-          description: 'Initial Evaluation & Management',
-          modifier1: '25',
-          modifier2: '',
-          units: 1,
-          charge: 1214.00,
-          dos
-        }
-      ];
-  }
+  return [];
 };
 
 /**
@@ -401,67 +319,15 @@ export const getFourBillsByCase = async (req, res) => {
       : ['prov-josmic']; // Sensible minimal fallback if no providers configured
     let createdAny = false;
 
+    // Auto-creation of demo/dummy bills is disabled. Bills should only exist when
+    // explicitly created by the user (via "Create Provider Bill") or recorded from clinical care.
+    /*
     for (const provId of providerIds) {
       if (!existingProvIds.has(provId)) {
-        const providerExists = await prisma.provider.findUnique({ where: { id: provId } });
-        if (!providerExists) continue;
-
-        const defaultLines = getDefaultServiceLinesForProvider(provId, targetCase.accidentDate || targetCase.initialDate);
-        const totalCharges = defaultLines.reduce((acc, l) => acc + ((Number(l.charge) || 0) * (Number(l.units) || 1)), 0);
-        const cleanCaseSuffix = (targetCase.id || 'case').replace(/[^a-zA-Z0-9]/g, '').slice(-6);
-        const billId = `bill-${provId.replace('prov-', '')}-${targetCase.id}`;
-        const prefix = provId.replace('prov-', '').toUpperCase();
-        const randNum = Math.floor(1000 + Math.random() * 9000);
-
-        try {
-          const newBill = await prisma.bill.create({
-            data: {
-              id: billId,
-              caseId: targetCase.id,
-              providerId: provId,
-              invoiceNumber: `INV-${prefix}-${cleanCaseSuffix}-${randNum}`,
-              statementNumber: `${randNum}-${prefix.charAt(0)}`,
-              statementDate: targetCase.initialDate || targetCase.accidentDate || new Date().toISOString().split('T')[0],
-              billToName: targetCase.attorneyName || targetCase.lawFirm || 'OJ LAW FIRM & ASSOCIATES',
-              billToAddress: targetCase.attorneyAddress || targetCase.lawFirmAddress || '11711 Bedford St. Suite 01, Houston TX 77031',
-              status: 'ISSUED',
-              totals: { totalCharges, totalPayments: 0, totalAdjustments: 0, balanceDue: totalCharges },
-              aging: { current: totalCharges, past30: 0, past60: 0, past90: 0 }
-            }
-          });
-
-          for (let i = 0; i < defaultLines.length; i++) {
-            const l = defaultLines[i];
-            const lineCharge = Number(l.charge) || 0;
-            const units = Number(l.units) || 1;
-            await prisma.serviceLine.create({
-              data: {
-                id: `srv-${newBill.id}-${i + 1}`,
-                billId: newBill.id,
-                dos: l.dos || targetCase.accidentDate || targetCase.initialDate || new Date().toISOString().split('T')[0],
-                dateOfService: l.dos || targetCase.accidentDate || targetCase.initialDate || new Date().toISOString().split('T')[0],
-                placeOfService: '11',
-                cptCode: l.cptCode,
-                description: l.description,
-                modifier1: l.modifier1 || null,
-                modifier2: l.modifier2 || null,
-                units: units,
-                charge: lineCharge,
-                insurancePayment: 0,
-                patientPayment: 0,
-                otherPayment: 0,
-                adjustments: 0,
-                balance: lineCharge * units,
-                lineBalance: lineCharge * units
-              }
-            });
-          }
-          createdAny = true;
-        } catch (createErr) {
-          console.warn(`Could not auto-generate bill for provider ${provId}:`, createErr.message);
-        }
+        ...
       }
     }
+    */
 
     if (createdAny) {
       bills = await prisma.bill.findMany({
@@ -637,8 +503,21 @@ export const getAllCmsClaims = async (req, res) => {
       }
     });
 
-    // Filter bills: Only include bills for clinics explicitly assigned to the case/patient
+    // Filter bills: Only include bills for clinics explicitly assigned to the case/patient AND with real saved billable services
+    const dummyKeywords = [
+      'Biostimulation',
+      'Musculoskeletal Tissue Regeneration',
+      'Spinal Decompression Supplies',
+      'Deep Thermal Bio-Modulation'
+    ];
+
     const activeBills = bills.filter(b => {
+      // Must have actual saved billable service lines
+      if (!b.serviceLines || b.serviceLines.length === 0) return false;
+      // Skip if all lines are legacy auto-seeded dummy template lines
+      const allDummy = b.serviceLines.every(l => dummyKeywords.some(kw => l.description?.includes(kw)));
+      if (allDummy) return false;
+
       const caseAssigned = b.case?.assignedProviderIds;
       const patientAssigned = b.case?.patient?.assignedProviderIds;
       let assigned = [];
@@ -727,8 +606,13 @@ export const createBill = async (req, res) => {
     }
 
     // Check if the bill already exists to prevent duplicate insertion error
-    const existing = await prisma.bill.findUnique({
-      where: { id: generatedId },
+    const existing = await prisma.bill.findFirst({
+      where: {
+        OR: [
+          { id: generatedId },
+          { caseId: data.caseId, providerId: data.providerId }
+        ]
+      },
       include: {
         serviceLines: true,
         provider: true,
@@ -746,11 +630,30 @@ export const createBill = async (req, res) => {
           ? data.diagnosisCodes.split(/[,;\n]+/).map(d => d.trim()).filter(Boolean)
           : data.diagnosisCodes;
       }
-      // If existing bill has no service lines but user provided lines to initialize it
-      if ((!existing.serviceLines || existing.serviceLines.length === 0) && Array.isArray(data.serviceLines) && data.serviceLines.length > 0) {
+
+      // Purge legacy auto-seeded dummy template lines so only real saved billable services remain
+      const dummyKeywords = [
+        'Biostimulation',
+        'Musculoskeletal Tissue Regeneration',
+        'Spinal Decompression Supplies',
+        'Deep Thermal Bio-Modulation',
+        'Trigger Point Injection - 1 or 2 Muscle Groups'
+      ];
+      if (existing.serviceLines && existing.serviceLines.some(l => dummyKeywords.some(kw => l.description?.includes(kw)))) {
+        await prisma.serviceLine.deleteMany({
+          where: {
+            billId: existing.id,
+            OR: dummyKeywords.map(kw => ({ description: { contains: kw } }))
+          }
+        });
+      }
+
+      // If user provided service lines in payload, insert them into existing bill
+      if (Array.isArray(data.serviceLines) && data.serviceLines.length > 0) {
         for (const item of data.serviceLines) {
           const lineId = item.id || `srv-l-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
           const chargeAmount = parseFloat(item.charge) || 0.00;
+          const units = parseInt(item.units) || 1;
           await prisma.serviceLine.create({
             data: {
               id: lineId,
@@ -758,12 +661,18 @@ export const createBill = async (req, res) => {
               dos: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
               dateOfService: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
               placeOfService: item.placeOfService || '11',
-              cptCode: item.cptCode || '90834',
-              description: item.description || 'Medical / Behavioral Service',
-              units: parseInt(item.units) || 1,
+              cptCode: item.cptCode || '99204',
+              description: item.description || 'Medical Consultation',
+              modifier1: item.modifier1 || item.mod1 || '',
+              modifier2: item.modifier2 || item.mod2 || '',
+              modifier3: item.modifier3 || item.mod3 || '',
+              modifier4: item.modifier4 || item.mod4 || '',
+              diagPointer: item.diagPointer || item.diagnosisPointer || 'A',
+              diagnosisPointer: item.diagnosisPointer || item.diagPointer || 'A',
+              units: units,
               charge: chargeAmount,
-              balance: chargeAmount,
-              lineBalance: chargeAmount,
+              balance: chargeAmount * units,
+              lineBalance: chargeAmount * units,
               insurancePayment: 0.00,
               patientPayment: 0.00,
               otherPayment: 0.00,
@@ -772,17 +681,17 @@ export const createBill = async (req, res) => {
           });
         }
         await recalculateBillTotals(existing.id);
-        const refreshed = await prisma.bill.findUnique({
-          where: { id: existing.id },
-          include: {
-            serviceLines: true,
-            provider: true,
-            case: { include: { patient: true } }
-          }
-        });
-        return res.status(200).json(formatBill(refreshed));
       }
-      return res.status(200).json(formatBill(existing));
+
+      const refreshed = await prisma.bill.findUnique({
+        where: { id: existing.id },
+        include: {
+          serviceLines: true,
+          provider: true,
+          case: { include: { patient: true } }
+        }
+      });
+      return res.status(200).json(formatBill(refreshed));
     }
 
     const newBill = await prisma.bill.create({
@@ -817,6 +726,7 @@ export const createBill = async (req, res) => {
       for (const item of data.serviceLines) {
         const lineId = item.id || `srv-l-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
         const chargeAmount = parseFloat(item.charge) || 0.00;
+        const units = parseInt(item.units) || 1;
         await prisma.serviceLine.create({
           data: {
             id: lineId,
@@ -824,12 +734,18 @@ export const createBill = async (req, res) => {
             dos: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
             dateOfService: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
             placeOfService: item.placeOfService || '11',
-            cptCode: item.cptCode || '90834',
-            description: item.description || 'Medical / Behavioral Service',
-            units: parseInt(item.units) || 1,
+            cptCode: item.cptCode || '99204',
+            description: item.description || 'Medical Consultation',
+            modifier1: item.modifier1 || item.mod1 || '',
+            modifier2: item.modifier2 || item.mod2 || '',
+            modifier3: item.modifier3 || item.mod3 || '',
+            modifier4: item.modifier4 || item.mod4 || '',
+            diagPointer: item.diagPointer || item.diagnosisPointer || 'A',
+            diagnosisPointer: item.diagnosisPointer || item.diagPointer || 'A',
+            units: units,
             charge: chargeAmount,
-            balance: chargeAmount,
-            lineBalance: chargeAmount,
+            balance: chargeAmount * units,
+            lineBalance: chargeAmount * units,
             insurancePayment: 0.00,
             patientPayment: 0.00,
             otherPayment: 0.00,
@@ -864,12 +780,42 @@ export const addServiceLine = async (req, res) => {
   const line = req.body;
 
   try {
-    const existing = await prisma.bill.findUnique({
-      where: { id }
+    let existing = await prisma.bill.findUnique({
+      where: { id },
+      include: { serviceLines: true }
     });
 
     if (!existing) {
+      existing = await prisma.bill.findFirst({
+        where: {
+          OR: [
+            { caseId: id },
+            { caseId: line.caseId, providerId: line.providerId }
+          ]
+        },
+        include: { serviceLines: true }
+      });
+    }
+
+    if (!existing) {
       return res.status(404).json({ error: 'Bill statement not found.' });
+    }
+
+    // Purge legacy auto-seeded dummy template lines so real service lines take precedence
+    const dummyKeywords = [
+      'Biostimulation',
+      'Musculoskeletal Tissue Regeneration',
+      'Spinal Decompression Supplies',
+      'Deep Thermal Bio-Modulation',
+      'Trigger Point Injection - 1 or 2 Muscle Groups'
+    ];
+    if (existing.serviceLines && existing.serviceLines.some(l => dummyKeywords.some(kw => l.description?.includes(kw)))) {
+      await prisma.serviceLine.deleteMany({
+        where: {
+          billId: existing.id,
+          OR: dummyKeywords.map(kw => ({ description: { contains: kw } }))
+        }
+      });
     }
 
     // Support single serviceLine additions or a list of lines (e.g. from CreateBillPage.jsx form submit)
@@ -877,14 +823,15 @@ export const addServiceLine = async (req, res) => {
 
     for (const item of linesToAdd) {
       const lineId = `srv-l-${Date.now()}-${Math.floor(Math.random() * 100)}`;
-      const chargeAmount = parseFloat(item.charge) || 180.00;
+      const chargeAmount = parseFloat(item.charge) || 0.00;
+      const units = parseInt(item.units) || 1;
 
       await prisma.serviceLine.create({
         data: {
           id: lineId,
-          billId: id,
-          dos: item.dos || new Date().toLocaleDateString('en-US'),
-          dateOfService: item.dos || new Date().toLocaleDateString('en-US'),
+          billId: existing.id,
+          dos: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
+          dateOfService: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
           placeOfService: item.placeOfService || '11',
           cptCode: item.cptCode || '99204',
           description: item.description || 'Medical Consultation',
@@ -892,12 +839,12 @@ export const addServiceLine = async (req, res) => {
           modifier2: item.modifier2 || item.mod2 || '',
           modifier3: item.modifier3 || item.mod3 || '',
           modifier4: item.modifier4 || item.mod4 || '',
-          diagPointer: item.diagPointer || item.diagnosisPointer || '',
-          diagnosisPointer: item.diagnosisPointer || item.diagPointer || '',
-          units: parseInt(item.units) || 1,
+          diagPointer: item.diagPointer || item.diagnosisPointer || 'A',
+          diagnosisPointer: item.diagnosisPointer || item.diagPointer || 'A',
+          units: units,
           charge: chargeAmount,
-          balance: chargeAmount,
-          lineBalance: chargeAmount,
+          balance: chargeAmount * units,
+          lineBalance: chargeAmount * units,
           insurancePayment: 0.00,
           patientPayment: 0.00,
           otherPayment: 0.00,
@@ -907,10 +854,10 @@ export const addServiceLine = async (req, res) => {
     }
 
     // Re-calculate parent totals
-    await recalculateBillTotals(id);
+    await recalculateBillTotals(existing.id);
 
     const updated = await prisma.bill.findUnique({
-      where: { id },
+      where: { id: existing.id },
       include: {
         serviceLines: true,
         provider: true,
