@@ -11,7 +11,9 @@ const getEffectiveBillTotalsAndAging = (b) => {
 
   const lines = b.serviceLines || [];
   lines.forEach(l => {
-    sumCharges += (Number(l.charge) || 0);
+    const units = Number(l.units) || 1;
+    const charge = Number(l.charge) || 0;
+    sumCharges += (charge * units);
     const insPay = Number(l.insurancePayment) || 0;
     const patPay = Number(l.patientPayment) || 0;
     const othPay = Number(l.otherPayment) || 0;
@@ -30,18 +32,39 @@ const getEffectiveBillTotalsAndAging = (b) => {
     };
   }
 
+  const balanceDue = Number(totals?.balanceDue ?? sumBalance);
+
+  // Compute dynamic aging based on age of bill / service dates
+  let billDate = b.createdAt ? new Date(b.createdAt) : new Date();
+  if (lines.length > 0) {
+    const dosDates = lines.map(l => l.dos || l.dateOfService).filter(Boolean);
+    if (dosDates.length > 0) {
+      const parsed = new Date(dosDates[0]);
+      if (!isNaN(parsed.getTime())) billDate = parsed;
+    }
+  }
+  const diffMs = Date.now() - billDate.getTime();
+  const days = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+
   let aging = typeof b.aging === 'string' ? JSON.parse(b.aging) : b.aging;
-  const agingSum = (aging?.current || 0) + (aging?.past30 || 0) + (aging?.past60 || 0) + (aging?.past90 || 0);
-  if (!aging || (agingSum === 0 && totals?.balanceDue > 0)) {
-    aging = {
-      current: totals.balanceDue,
-      past30: 0,
-      past60: 0,
-      past90: 0
-    };
+  const storedAgingSum = (aging?.current || 0) + (aging?.past30 || 0) + (aging?.past60 || 0) + (aging?.past90 || 0) + (aging?.over90 || 0);
+
+  // If aging was manually customized with non-zero past buckets, preserve it; otherwise compute by actual age
+  if (!aging || storedAgingSum === 0 || (aging.current === balanceDue && days > 0)) {
+    if (days === 0) {
+      aging = { current: balanceDue, past30: 0, past60: 0, past90: 0, over90: 0 };
+    } else if (days <= 30) {
+      aging = { current: 0, past30: balanceDue, past60: 0, past90: 0, over90: 0 };
+    } else if (days <= 60) {
+      aging = { current: 0, past30: 0, past60: balanceDue, past90: 0, over90: 0 };
+    } else if (days <= 90) {
+      aging = { current: 0, past30: 0, past60: 0, past90: balanceDue, over90: 0 };
+    } else {
+      aging = { current: 0, past30: 0, past60: 0, past90: 0, over90: balanceDue };
+    }
   }
 
-  return { totals: totals || { totalCharges: 0, totalPayments: 0, totalAdjustments: 0, balanceDue: 0 }, aging: aging || { current: 0, past30: 0, past60: 0, past90: 0 } };
+  return { totals: totals || { totalCharges: 0, totalPayments: 0, totalAdjustments: 0, balanceDue: 0 }, aging: aging || { current: 0, past30: 0, past60: 0, past90: 0, over90: 0 } };
 };
 
 /**
@@ -471,9 +494,9 @@ export const getFourBillsByCase = async (req, res) => {
       }
     }
 
-    // Filter returned bills strictly to those assigned to this case/patient if assignedProviderIds is set
+    // Filter returned bills: Include bills assigned to this case/patient OR any bill with real saved service lines
     const filteredBills = (Array.isArray(targetProviderIds) && targetProviderIds.length > 0)
-      ? bills.filter(b => targetProviderIds.includes(b.providerId))
+      ? bills.filter(b => targetProviderIds.includes(b.providerId) || (b.serviceLines && b.serviceLines.length > 0))
       : bills;
 
     return res.status(200).json({
@@ -503,38 +526,11 @@ export const getAllCmsClaims = async (req, res) => {
       }
     });
 
-    // Filter bills: Only include bills for clinics explicitly assigned to the case/patient AND with real saved billable services
-    const dummyKeywords = [
-      'Biostimulation',
-      'Musculoskeletal Tissue Regeneration',
-      'Spinal Decompression Supplies',
-      'Deep Thermal Bio-Modulation'
-    ];
-
+    // Include bills that have actual saved billable service lines
     const activeBills = bills.filter(b => {
-      // Must have actual saved billable service lines
       if (!b.serviceLines || b.serviceLines.length === 0) return false;
-      // Skip if all lines are legacy auto-seeded dummy template lines
-      const allDummy = b.serviceLines.every(l => dummyKeywords.some(kw => l.description?.includes(kw)));
-      if (allDummy) return false;
-
-      const caseAssigned = b.case?.assignedProviderIds;
-      const patientAssigned = b.case?.patient?.assignedProviderIds;
-      let assigned = [];
-      if (caseAssigned) {
-        try {
-          assigned = typeof caseAssigned === 'string' ? JSON.parse(caseAssigned) : caseAssigned;
-        } catch (e) {}
-      }
-      if ((!Array.isArray(assigned) || assigned.length === 0) && patientAssigned) {
-        try {
-          assigned = typeof patientAssigned === 'string' ? JSON.parse(patientAssigned) : patientAssigned;
-        } catch (e) {}
-      }
-      if (Array.isArray(assigned) && assigned.length > 0) {
-        return assigned.includes(b.providerId);
-      }
-      return true; // Keep if no specific assignment rule exists
+      const totalCharge = b.serviceLines.reduce((sum, l) => sum + ((Number(l.charge) || 0) * (Number(l.units) || 1)), 0);
+      return totalCharge > 0;
     });
 
     return res.status(200).json({
@@ -579,6 +575,65 @@ export const getBillById = async (req, res) => {
 };
 
 /**
+ * Synchronize provider assignment to the clinical case and patient record
+ * so that bills posted for any valid clinic are recognized by CMS-1500 and ledger filters.
+ */
+const ensureProviderAssignedToCase = async (caseId, providerId) => {
+  if (!caseId || !providerId) return;
+  try {
+    const targetCase = await prisma.case.findUnique({
+      where: { id: caseId },
+      include: { patient: true }
+    });
+    if (!targetCase) return;
+
+    let currentAssigned = [];
+    if (targetCase.assignedProviderIds) {
+      try {
+        currentAssigned = typeof targetCase.assignedProviderIds === 'string'
+          ? JSON.parse(targetCase.assignedProviderIds)
+          : targetCase.assignedProviderIds;
+      } catch (e) {
+        currentAssigned = [];
+      }
+    }
+    if (!Array.isArray(currentAssigned)) currentAssigned = [];
+
+    if (!currentAssigned.includes(providerId)) {
+      currentAssigned.push(providerId);
+      await prisma.case.update({
+        where: { id: caseId },
+        data: { assignedProviderIds: currentAssigned }
+      });
+    }
+
+    if (targetCase.patientId) {
+      let patientAssigned = [];
+      if (targetCase.patient?.assignedProviderIds) {
+        try {
+          patientAssigned = typeof targetCase.patient.assignedProviderIds === 'string'
+            ? JSON.parse(targetCase.patient.assignedProviderIds)
+            : targetCase.patient.assignedProviderIds;
+        } catch (e) {
+          patientAssigned = [];
+        }
+      }
+      if (!Array.isArray(patientAssigned)) patientAssigned = [];
+
+      if (!patientAssigned.includes(providerId)) {
+        patientAssigned.push(providerId);
+        await prisma.patient.update({
+          where: { id: targetCase.patientId },
+          data: { assignedProviderIds: patientAssigned }
+        });
+      }
+    }
+  } catch (err) {
+    console.warn(`[ensureProviderAssignedToCase] Warning syncing provider ${providerId} to case ${caseId}:`, err.message);
+  }
+};
+
+/**
  * Create/Generate a new billing statement
  */
 export const createBill = async (req, res) => {
@@ -587,6 +642,26 @@ export const createBill = async (req, res) => {
   if (!data.caseId || !data.providerId) {
     return res.status(400).json({ error: 'caseId and providerId are required.' });
   }
+
+  // Validate case exists in database
+  const targetCase = await prisma.case.findUnique({
+    where: { id: data.caseId },
+    include: { patient: true }
+  });
+  if (!targetCase) {
+    return res.status(404).json({ error: `Clinical case '${data.caseId}' not found.` });
+  }
+
+  // Validate provider exists in database
+  const targetProvider = await prisma.provider.findUnique({
+    where: { id: data.providerId }
+  });
+  if (!targetProvider) {
+    return res.status(404).json({ error: `Provider '${data.providerId}' not found.` });
+  }
+
+  // Synchronize provider assignment to the case & patient
+  await ensureProviderAssignedToCase(data.caseId, data.providerId);
 
   const providerKey = data.providerId.replace('prov-', '');
   const generatedId = data.id || `bill-${providerKey}-${data.caseId}`;
@@ -604,6 +679,49 @@ export const createBill = async (req, res) => {
         data: { diagnosisCodes: dxList }
       }).catch(() => { });
     }
+
+    const incomingLines = (Array.isArray(data.serviceLines) && data.serviceLines.length > 0)
+      ? data.serviceLines
+      : (data.cptCode && data.charge !== undefined ? [{
+          cptCode: data.cptCode,
+          charge: data.charge,
+          units: data.units || 1,
+          dos: data.dos || data.dateOfService,
+          description: data.description,
+          modifier1: data.modifier1,
+          modifier2: data.modifier2,
+          modifier3: data.modifier3,
+          modifier4: data.modifier4,
+          diagPointer: data.diagPointer || data.diagnosisPointer || 'A'
+        }] : []);
+
+    const linesToCreate = incomingLines.map((item, idx) => {
+      const lineId = item.id || `srv-l-${Date.now()}-${idx + 1}-${Math.floor(Math.random() * 1000)}`;
+      const chargeAmount = parseFloat(item.charge) || 0.00;
+      const units = parseInt(item.units) || 1;
+      return {
+        id: lineId,
+        dos: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
+        dateOfService: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
+        placeOfService: item.placeOfService || '11',
+        cptCode: item.cptCode || '99204',
+        description: item.description || 'Medical Consultation',
+        modifier1: item.modifier1 || item.mod1 || '',
+        modifier2: item.modifier2 || item.mod2 || '',
+        modifier3: item.modifier3 || item.mod3 || '',
+        modifier4: item.modifier4 || item.mod4 || '',
+        diagPointer: item.diagPointer || item.diagnosisPointer || 'A',
+        diagnosisPointer: item.diagnosisPointer || item.diagPointer || 'A',
+        units: units,
+        charge: chargeAmount,
+        balance: chargeAmount * units,
+        lineBalance: chargeAmount * units,
+        insurancePayment: 0.00,
+        patientPayment: 0.00,
+        otherPayment: 0.00,
+        adjustments: 0.00
+      };
+    });
 
     // Check if the bill already exists to prevent duplicate insertion error
     const existing = await prisma.bill.findFirst({
@@ -625,61 +743,26 @@ export const createBill = async (req, res) => {
     });
 
     if (existing) {
+      if ((existing.status === 'FINALIZED' || existing.status === 'FINALISED' || existing.status === 'FINALISED_DEMO') && linesToCreate.length > 0) {
+        return res.status(400).json({ error: 'Cannot append service lines to a finalized bill statement.' });
+      }
+
       if (data.diagnosisCodes && existing.case) {
         existing.case.diagnosisCodes = typeof data.diagnosisCodes === 'string'
           ? data.diagnosisCodes.split(/[,;\n]+/).map(d => d.trim()).filter(Boolean)
           : data.diagnosisCodes;
       }
 
-      // Purge legacy auto-seeded dummy template lines so only real saved billable services remain
-      const dummyKeywords = [
-        'Biostimulation',
-        'Musculoskeletal Tissue Regeneration',
-        'Spinal Decompression Supplies',
-        'Deep Thermal Bio-Modulation',
-        'Trigger Point Injection - 1 or 2 Muscle Groups'
-      ];
-      if (existing.serviceLines && existing.serviceLines.some(l => dummyKeywords.some(kw => l.description?.includes(kw)))) {
-        await prisma.serviceLine.deleteMany({
-          where: {
-            billId: existing.id,
-            OR: dummyKeywords.map(kw => ({ description: { contains: kw } }))
-          }
-        });
-      }
-
-      // If user provided service lines in payload, insert them into existing bill
-      if (Array.isArray(data.serviceLines) && data.serviceLines.length > 0) {
-        for (const item of data.serviceLines) {
-          const lineId = item.id || `srv-l-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-          const chargeAmount = parseFloat(item.charge) || 0.00;
-          const units = parseInt(item.units) || 1;
-          await prisma.serviceLine.create({
+      // If user provided service lines in payload, insert them atomically into existing bill
+      if (linesToCreate.length > 0) {
+        await prisma.$transaction(
+          linesToCreate.map(lineData => prisma.serviceLine.create({
             data: {
-              id: lineId,
-              billId: existing.id,
-              dos: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
-              dateOfService: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
-              placeOfService: item.placeOfService || '11',
-              cptCode: item.cptCode || '99204',
-              description: item.description || 'Medical Consultation',
-              modifier1: item.modifier1 || item.mod1 || '',
-              modifier2: item.modifier2 || item.mod2 || '',
-              modifier3: item.modifier3 || item.mod3 || '',
-              modifier4: item.modifier4 || item.mod4 || '',
-              diagPointer: item.diagPointer || item.diagnosisPointer || 'A',
-              diagnosisPointer: item.diagnosisPointer || item.diagPointer || 'A',
-              units: units,
-              charge: chargeAmount,
-              balance: chargeAmount * units,
-              lineBalance: chargeAmount * units,
-              insurancePayment: 0.00,
-              patientPayment: 0.00,
-              otherPayment: 0.00,
-              adjustments: 0.00
+              ...lineData,
+              billId: existing.id
             }
-          });
-        }
+          }))
+        );
         await recalculateBillTotals(existing.id);
       }
 
@@ -694,6 +777,9 @@ export const createBill = async (req, res) => {
       return res.status(200).json(formatBill(refreshed));
     }
 
+    const totalCharges = linesToCreate.reduce((sum, l) => sum + (l.charge * l.units), 0);
+
+    // Create new bill and all service lines atomically in a single transaction
     const newBill = await prisma.bill.create({
       data: {
         id: generatedId,
@@ -708,8 +794,11 @@ export const createBill = async (req, res) => {
         cmsSignatures: data.cmsSignatures 
           ? (typeof data.cmsSignatures === 'string' ? data.cmsSignatures : JSON.stringify(data.cmsSignatures))
           : null,
-        totals: { totalCharges: 0, totalPayments: 0, totalAdjustments: 0, balanceDue: 0 },
-        aging: { current: 0, past30: 0, past60: 0, past90: 0 }
+        totals: { totalCharges, totalPayments: 0, totalAdjustments: 0, balanceDue: totalCharges },
+        aging: { current: totalCharges, past30: 0, past60: 0, past90: 0 },
+        serviceLines: linesToCreate.length > 0 ? {
+          create: linesToCreate
+        } : undefined
       },
       include: {
         serviceLines: true,
@@ -722,50 +811,7 @@ export const createBill = async (req, res) => {
       }
     });
 
-    if (Array.isArray(data.serviceLines) && data.serviceLines.length > 0) {
-      for (const item of data.serviceLines) {
-        const lineId = item.id || `srv-l-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        const chargeAmount = parseFloat(item.charge) || 0.00;
-        const units = parseInt(item.units) || 1;
-        await prisma.serviceLine.create({
-          data: {
-            id: lineId,
-            billId: newBill.id,
-            dos: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
-            dateOfService: item.dos || item.dateOfService || new Date().toISOString().split('T')[0],
-            placeOfService: item.placeOfService || '11',
-            cptCode: item.cptCode || '99204',
-            description: item.description || 'Medical Consultation',
-            modifier1: item.modifier1 || item.mod1 || '',
-            modifier2: item.modifier2 || item.mod2 || '',
-            modifier3: item.modifier3 || item.mod3 || '',
-            modifier4: item.modifier4 || item.mod4 || '',
-            diagPointer: item.diagPointer || item.diagnosisPointer || 'A',
-            diagnosisPointer: item.diagnosisPointer || item.diagPointer || 'A',
-            units: units,
-            charge: chargeAmount,
-            balance: chargeAmount * units,
-            lineBalance: chargeAmount * units,
-            insurancePayment: 0.00,
-            patientPayment: 0.00,
-            otherPayment: 0.00,
-            adjustments: 0.00
-          }
-        });
-      }
-      await recalculateBillTotals(newBill.id);
-    }
-
-    const finalBill = await prisma.bill.findUnique({
-      where: { id: newBill.id },
-      include: {
-        serviceLines: true,
-        provider: true,
-        case: { include: { patient: true } }
-      }
-    });
-
-    return res.status(201).json(formatBill(finalBill || newBill));
+    return res.status(201).json(formatBill(newBill));
   } catch (error) {
     console.error('Error creating bill statement:', error);
     return res.status(500).json({ error: 'Failed to generate bill statement.' });
@@ -801,21 +847,13 @@ export const addServiceLine = async (req, res) => {
       return res.status(404).json({ error: 'Bill statement not found.' });
     }
 
-    // Purge legacy auto-seeded dummy template lines so real service lines take precedence
-    const dummyKeywords = [
-      'Biostimulation',
-      'Musculoskeletal Tissue Regeneration',
-      'Spinal Decompression Supplies',
-      'Deep Thermal Bio-Modulation',
-      'Trigger Point Injection - 1 or 2 Muscle Groups'
-    ];
-    if (existing.serviceLines && existing.serviceLines.some(l => dummyKeywords.some(kw => l.description?.includes(kw)))) {
-      await prisma.serviceLine.deleteMany({
-        where: {
-          billId: existing.id,
-          OR: dummyKeywords.map(kw => ({ description: { contains: kw } }))
-        }
-      });
+    if (existing.status === 'FINALIZED' || existing.status === 'FINALISED' || existing.status === 'FINALISED_DEMO') {
+      return res.status(400).json({ error: 'Cannot append service lines to a finalized bill statement.' });
+    }
+
+    // Synchronize provider assignment to the clinical case and patient record
+    if (existing.caseId && existing.providerId) {
+      await ensureProviderAssignedToCase(existing.caseId, existing.providerId);
     }
 
     // Support single serviceLine additions or a list of lines (e.g. from CreateBillPage.jsx form submit)
@@ -1122,7 +1160,7 @@ export const finaliseBill = async (req, res) => {
     const updated = await prisma.bill.update({
       where: { id },
       data: {
-        status: 'FINALISED_DEMO'
+        status: 'FINALIZED'
       },
       include: {
         serviceLines: true,
@@ -1271,7 +1309,20 @@ export const getAgingSummary = async (req, res) => {
  */
 export const getOverviewStats = async (req, res) => {
   try {
+    const { providerId, dateFrom, dateTo } = req.query;
+
+    const where = {};
+    if (providerId && providerId !== 'ALL') {
+      where.providerId = providerId;
+    }
+    if (dateFrom || dateTo) {
+      where.createdAt = {};
+      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
+      if (dateTo) where.createdAt.lte = new Date(dateTo);
+    }
+
     const bills = await prisma.bill.findMany({
+      where,
       include: {
         provider: true,
         serviceLines: true
@@ -1287,13 +1338,20 @@ export const getOverviewStats = async (req, res) => {
 
     const providerMap = {};
     const colors = ['teal', 'blue', 'violet', 'amber', 'emerald', 'rose', 'indigo', 'cyan'];
-    
-    allProviders.forEach((p, idx) => {
+
+    // If filtered by specific provider, only initialize that provider in summary
+    const targetProviders = (providerId && providerId !== 'ALL')
+      ? allProviders.filter(p => p.id === providerId)
+      : allProviders;
+
+    targetProviders.forEach((p, idx) => {
       providerMap[p.id] = {
+        id: p.id,
         name: p.name || 'Unknown',
         specialty: p.serviceCategory || 'Practice Provider',
         total: 0,
         paid: 0,
+        adjustments: 0,
         balance: 0,
         status: 'Issued',
         color: colors[idx % colors.length]
@@ -1304,6 +1362,7 @@ export const getOverviewStats = async (req, res) => {
     let past30 = 0;
     let past60 = 0;
     let past90 = 0;
+    let over90 = 0;
 
     for (const b of bills) {
       const { totals, aging } = getEffectiveBillTotalsAndAging(b);
@@ -1324,24 +1383,33 @@ export const getOverviewStats = async (req, res) => {
       past30 += Number(aging.past30 || 0);
       past60 += Number(aging.past60 || 0);
       past90 += Number(aging.past90 || 0);
+      over90 += Number(aging.over90 || 0);
 
       if (!providerMap[b.providerId]) {
-        providerMap[b.providerId] = {
-          name: b.provider?.name || 'Unknown',
-          specialty: b.provider?.serviceCategory || 'Practice Provider',
-          total: 0,
-          paid: 0,
-          balance: 0,
-          status: 'Issued',
-          color: 'slate'
-        };
+        // If a bill exists for a provider not in targetProviders (e.g. edge case), initialize it
+        if (!providerId || providerId === 'ALL' || b.providerId === providerId) {
+          providerMap[b.providerId] = {
+            id: b.providerId,
+            name: b.provider?.name || 'Unknown',
+            specialty: b.provider?.serviceCategory || 'Practice Provider',
+            total: 0,
+            paid: 0,
+            adjustments: 0,
+            balance: 0,
+            status: 'Issued',
+            color: 'slate'
+          };
+        }
       }
       
-      providerMap[b.providerId].total += chg;
-      providerMap[b.providerId].paid += pmt;
-      providerMap[b.providerId].balance += bal;
-      if (b.status === 'FINALISED_DEMO' || b.status === 'Finalised') {
-        providerMap[b.providerId].status = 'Finalised';
+      if (providerMap[b.providerId]) {
+        providerMap[b.providerId].total += chg;
+        providerMap[b.providerId].paid += pmt;
+        providerMap[b.providerId].adjustments += adj;
+        providerMap[b.providerId].balance += bal;
+        if (b.status === 'FINALISED_DEMO' || b.status === 'Finalised' || b.status === 'FINALIZED') {
+          providerMap[b.providerId].status = 'Finalised';
+        }
       }
     }
 
@@ -1351,13 +1419,14 @@ export const getOverviewStats = async (req, res) => {
         amountCollected: Number(totalPayments.toFixed(2)),
         totalAdjustments: Number(totalAdjustments.toFixed(2)),
         outstandingBalance: Number(balanceDue.toFixed(2)),
-        past90Overdue: Number(past90.toFixed(2))
+        past90Overdue: Number(over90.toFixed(2))
       },
       agingBuckets: {
         current: Number(current.toFixed(2)),
         past30: Number(past30.toFixed(2)),
         past60: Number(past60.toFixed(2)),
         past90: Number(past90.toFixed(2)),
+        over90: Number(over90.toFixed(2)),
         grandTotal: Number(balanceDue.toFixed(2))
       },
       providers: Object.values(providerMap)
@@ -1616,9 +1685,17 @@ export const updateBill = async (req, res) => {
       return res.status(404).json({ error: 'Bill not found' });
     }
 
+    if ((existing.status === 'FINALIZED' || existing.status === 'FINALISED' || existing.status === 'FINALISED_DEMO') && (Array.isArray(lineItems) || totalCharges !== undefined)) {
+      return res.status(400).json({ error: 'Cannot modify service lines or charges of a finalized bill statement.' });
+    }
+
     if (Array.isArray(lineItems)) {
       await prisma.serviceLine.deleteMany({ where: { billId: id } });
       for (const line of lineItems) {
+        const lineUnits = Number(line.units) || 1;
+        const lineCharge = Number(line.charge) || 0;
+        const lineTotal = lineCharge * lineUnits;
+
         await prisma.serviceLine.create({
           data: {
             id: `line-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -1626,14 +1703,14 @@ export const updateBill = async (req, res) => {
             dos: line.dos || line.dateOfService || new Date().toISOString().split('T')[0],
             cptCode: line.cptCode || '99204',
             description: line.description || 'Medical Modality Service',
-            units: Number(line.units) || 1,
-            charge: Number(line.charge) || 0,
+            units: lineUnits,
+            charge: lineCharge,
             insurancePayment: Number(line.payments?.insurance) || 0,
             patientPayment: Number(line.payments?.patient) || 0,
             otherPayment: Number(line.payments?.other) || 0,
             adjustments: Number(line.adjustments) || 0,
-            balance: Number(line.charge) || 0,
-            lineBalance: Number(line.charge) || 0
+            balance: lineTotal,
+            lineBalance: lineTotal
           }
         });
       }
