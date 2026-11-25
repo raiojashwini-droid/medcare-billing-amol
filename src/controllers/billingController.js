@@ -581,8 +581,13 @@ export const getBillById = async (req, res) => {
 const ensureProviderAssignedToCase = async (caseId, providerId) => {
   if (!caseId || !providerId) return;
   try {
-    const targetCase = await prisma.case.findUnique({
-      where: { id: caseId },
+    const targetCase = await prisma.case.findFirst({
+      where: {
+        OR: [
+          { id: caseId },
+          { caseId: caseId }
+        ]
+      },
       include: { patient: true }
     });
     if (!targetCase) return;
@@ -602,7 +607,7 @@ const ensureProviderAssignedToCase = async (caseId, providerId) => {
     if (!currentAssigned.includes(providerId)) {
       currentAssigned.push(providerId);
       await prisma.case.update({
-        where: { id: caseId },
+        where: { id: targetCase.id },
         data: { assignedProviderIds: currentAssigned }
       });
     }
@@ -643,9 +648,14 @@ export const createBill = async (req, res) => {
     return res.status(400).json({ error: 'caseId and providerId are required.' });
   }
 
-  // Validate case exists in database
-  const targetCase = await prisma.case.findUnique({
-    where: { id: data.caseId },
+  // Validate case exists in database (check both internal UUID and user-facing caseId string)
+  const targetCase = await prisma.case.findFirst({
+    where: {
+      OR: [
+        { id: data.caseId },
+        { caseId: data.caseId }
+      ]
+    },
     include: { patient: true }
   });
   if (!targetCase) {
@@ -661,21 +671,21 @@ export const createBill = async (req, res) => {
   }
 
   // Synchronize provider assignment to the case & patient
-  await ensureProviderAssignedToCase(data.caseId, data.providerId);
+  await ensureProviderAssignedToCase(targetCase.id, data.providerId);
 
   const providerKey = data.providerId.replace('prov-', '');
-  const generatedId = data.id || `bill-${providerKey}-${data.caseId}`;
+  const generatedId = data.id || `bill-${providerKey}-${targetCase.id}`;
 
   const statementNum = `${Math.floor(100000 + Math.random() * 900000)}`;
   const statementDate = new Date().toLocaleDateString('en-US');
 
   try {
-    if (data.diagnosisCodes && data.caseId) {
+    if (data.diagnosisCodes && targetCase.id) {
       const dxList = typeof data.diagnosisCodes === 'string'
         ? data.diagnosisCodes.split(/[,;\n]+/).map(d => d.trim()).filter(Boolean)
         : data.diagnosisCodes;
       await prisma.case.update({
-        where: { id: data.caseId },
+        where: { id: targetCase.id },
         data: { diagnosisCodes: dxList }
       }).catch(() => { });
     }
@@ -728,7 +738,7 @@ export const createBill = async (req, res) => {
       where: {
         OR: [
           { id: generatedId },
-          { caseId: data.caseId, providerId: data.providerId }
+          { caseId: targetCase.id, providerId: data.providerId }
         ]
       },
       include: {
@@ -783,7 +793,7 @@ export const createBill = async (req, res) => {
     const newBill = await prisma.bill.create({
       data: {
         id: generatedId,
-        caseId: data.caseId,
+        caseId: targetCase.id,
         providerId: data.providerId,
         invoiceNumber: `INV-${Date.now()}`,
         statementNumber: statementNum,
@@ -832,15 +842,15 @@ export const addServiceLine = async (req, res) => {
     });
 
     if (!existing) {
-      existing = await prisma.bill.findFirst({
-        where: {
-          OR: [
-            { caseId: id },
-            { caseId: line.caseId, providerId: line.providerId }
-          ]
-        },
-        include: { serviceLines: true }
-      });
+      if (line.providerId && (line.caseId || id)) {
+        existing = await prisma.bill.findFirst({
+          where: {
+            caseId: line.caseId || id,
+            providerId: line.providerId
+          },
+          include: { serviceLines: true }
+        });
+      }
     }
 
     if (!existing) {
