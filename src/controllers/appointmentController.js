@@ -129,12 +129,8 @@ export const createAppointment = async (req, res) => {
     return res.status(400).json({ error: 'date and startTime are required.' });
   }
 
-  // Check clinic closure & past dates (allow recording completed/historical visits)
-  const isHistorical = data.status === 'COMPLETED' || data.allowPastDate || data.isCompletedVisit || data.isHistorical;
+  // Check clinic closure (weekends & US holidays unless admin override)
   const closedCheck = isClinicClosed(data.date);
-  if (closedCheck.isPast && !isHistorical) {
-    return res.status(400).json({ error: 'Appointments cannot be scheduled for past dates.' });
-  }
   if (closedCheck.isClosed && !data.holidayOverride) {
     return res.status(400).json({ error: closedCheck.reason });
   }
@@ -363,19 +359,6 @@ export const getAvailableSlots = async (req, res) => {
     const todayDateStr = `${partMap.year}-${partMap.month}-${partMap.day}`;
     const currentMinutes = parseInt(partMap.hour, 10) * 60 + parseInt(partMap.minute, 10);
 
-    const isToday = date === todayDateStr;
-    const isPastDate = date < todayDateStr;
-
-    // Check if entire date is in the past
-    if (isPastDate) {
-      return res.status(200).json({
-        isClosed: true,
-        isPast: true,
-        reason: 'Selected date is in the past. Please choose a future date.',
-        slots: []
-      });
-    }
-
     // 1. Check if official US Federal Holiday
     const holidayCheck = isUSFederalHoliday(date);
     if (holidayCheck.isHoliday) {
@@ -423,24 +406,22 @@ export const getAvailableSlots = async (req, res) => {
 
     const slots = defaultTimeSlots.map(time => {
       const isBooked = bookedTimes.includes(time);
-      const slotMinutes = parseTimeToMinutes(time);
-      const isPastSlot = isToday && (slotMinutes <= currentMinutes);
 
       return {
         time,
-        available: !isBooked && !isPastSlot,
+        available: !isBooked,
         isBooked,
-        isPast: isPastSlot,
-        reason: isPastSlot ? 'Time passed' : isBooked ? 'Already booked' : 'Available'
+        isPast: false,
+        reason: isBooked ? 'Already booked' : 'Available'
       };
     });
 
     const hasAnyAvailable = slots.some(s => s.available);
 
     return res.status(200).json({
-      isClosed: isToday && !hasAnyAvailable,
-      allSlotsPassed: isToday && !hasAnyAvailable,
-      reason: (isToday && !hasAnyAvailable) ? 'All appointment slots for today have already passed. Please select tomorrow or an upcoming date.' : '',
+      isClosed: false,
+      allSlotsPassed: false,
+      reason: '',
       isWeekend: false,
       isHoliday: false,
       slots

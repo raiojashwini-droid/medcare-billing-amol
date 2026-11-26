@@ -125,16 +125,6 @@ export const isWeekend = (dateStr) => {
 export const isClinicClosed = (dateStr) => {
   if (!dateStr) return { isClosed: false, reason: '' };
 
-  if (isPastDate(dateStr)) {
-    return {
-      isClosed: true,
-      isPast: true,
-      isWeekend: false,
-      isHoliday: false,
-      reason: 'Past Date - Appointments cannot be scheduled for past dates'
-    };
-  }
-
   const weekendCheck = isWeekend(dateStr);
   if (weekendCheck.isWeekend) {
     return {
